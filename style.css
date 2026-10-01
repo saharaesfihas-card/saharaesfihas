@@ -27,3 +27,6 @@
 .product-photo img{position:absolute;left:0;display:block;width:100%;height:auto;max-width:none}
 .product-info{min-width:0}
 @media(max-width:1100px){.product.has-photo{grid-template-columns:88px minmax(0,1fr);gap:12px 16px}.product-photo{width:88px;grid-row:1 / 3;align-self:start}.has-photo .product-quantity{grid-column:2;justify-self:end}}
+
+/* Formas de pagamento */
+.payment-methods{min-width:0;margin:22px 0 0;padding:18px 0 0;border:0;border-top:1px solid var(--line)}.payment-methods legend{font-size:15px;font-weight:700;padding:0 8px 0 0}.bag .payment-option{display:flex;gap:12px;align-items:center;margin:10px 0;padding:12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:400}.payment-option input{width:18px;height:18px;flex-shrink:0;accent-color:var(--wine);margin:0}.payment-option span{min-width:0}.payment-option strong{display:block;font-size:14px}.payment-option small{display:block;margin-top:4px;color:#79686e;font-size:12px}.payment-option:has(input:checked){background:#f8eef1;border-color:var(--wine)}.payment-help{font-size:12px;line-height:1.5;color:#79686e;margin:12px 0 0}
