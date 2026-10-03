@@ -1,11 +1,11 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261003-coca2l-v1';
+const CACHE = 'sahara-pwa-20261003-coca-tamanhos-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
   'logo-sahara.jpg', 'esfihas.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
-  'images/coca-2l.jpg', 'images/coca-350.jpg', 'images/coca-zero-350.jpg', 'images/guarana-350.jpg', 'images/agua-500.jpg', 'images/refri-2l.jpg',
+  'images/coca-600.jpg', 'images/coca-1l.jpg', 'images/coca-2l.jpg', 'images/coca-350.jpg', 'images/coca-zero-350.jpg', 'images/guarana-350.jpg', 'images/agua-500.jpg', 'images/refri-2l.jpg',
   'images/chocolate-profissional.jpg', 'images/doce-leite-profissional.jpg',
   'images/porquinho.jpg', 'images/bacon-queijo.jpg', 'images/bacon.jpg', 'images/brigadeiro.jpg',
   'images/brocolis-queijo.jpg', 'images/calabresa-catupiry.jpg', 'images/calabresa.jpg',
