@@ -30,5 +30,87 @@ if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContex
 const deliveryForm=document.querySelector('#delivery-form');
 deliveryForm.addEventListener('submit',event=>event.preventDefault());
 deliveryForm.addEventListener('change',()=>{const delivery=document.querySelector('input[name="fulfillment"]').value==='delivery';document.querySelector('#delivery-address').hidden=!delivery;for(const id of ['#street','#house-number']){const field=document.querySelector(id);field.disabled=!delivery;field.required=delivery;}});
-document.querySelector('#category-nav').innerHTML=groups.map((g,i)=>`<a href="#category-${i}">${g.title.replace('Esfihas ','')}</a>`).join('');document.querySelectorAll('.category').forEach((el,i)=>el.id=`category-${i}`);
+const categoryNav=document.querySelector('#category-nav');
+const categorySections=[...document.querySelectorAll('.category')];
+categorySections.forEach((section,i)=>section.id=`category-${i}`);
+const categoryIcons=[
+  '<circle cx="12" cy="12" r="8"/><path d="m8 14 4-7 4 7H8Z"/>',
+  '<path d="m12 3 2.5 5.5 6 .8-4.4 4.2 1.1 6-5.2-2.9-5.2 2.9 1.1-6L3.5 9.3l6-.8L12 3Z"/>',
+  '<path d="M5 10h14l-2 10H7L5 10Z"/><path d="M6 10a4 4 0 0 1 4-5 3 3 0 0 1 6 1 3 3 0 0 1 2 4M10 14v3m4-3v3"/>',
+  '<path d="m3 8 9-5 9 5-9 5-9-5Zm0 0v9l9 5 9-5V8m-9 5v9M7.5 5.5l9 5"/>',
+  '<path d="M8 8h8l-1 13H9L8 8Zm5 0 2-5h4M7 8h10"/>',
+  '<path d="m7 10 6-6a3 3 0 0 1 5 3l-3 11-6 3-4-7 2-4Z"/><path d="m7 10 9 5M9 7l8 5M6 15l5 6"/>'
+];
+const categorySvg=paths=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths}</svg>`;
+categoryNav.innerHTML=`<div class="category-nav-heading"><span class="category-nav-label">Explore o cardápio</span><div class="category-nav-controls" hidden><button type="button" class="category-nav-arrow" data-direction="-1" aria-label="Ver categorias anteriores" aria-controls="category-track">${categorySvg('<path d="m14 6-6 6 6 6"/>')}</button><button type="button" class="category-nav-arrow" data-direction="1" aria-label="Ver próximas categorias" aria-controls="category-track">${categorySvg('<path d="m10 6 6 6-6 6"/>')}</button></div></div><div class="category-nav-window"><div id="category-track" class="category-nav-track">${groups.map((group,i)=>`<a class="category-link" href="#category-${i}"${i===0?' aria-current="location"':''}><span class="category-icon">${categorySvg(categoryIcons[i])}</span><span>${group.title.replace('Esfihas ','').replace(/^./,letter=>letter.toUpperCase())}</span></a>`).join('')}</div></div>`;
+const categoryTrack=document.querySelector('#category-track');
+const categoryLinks=[...categoryTrack.querySelectorAll('a')];
+const categoryControls=categoryNav.querySelector('.category-nav-controls');
+const previousCategory=categoryNav.querySelector('[data-direction="-1"]');
+const nextCategory=categoryNav.querySelector('[data-direction="1"]');
+const reducedCategoryMotion=window.matchMedia('(prefers-reduced-motion: reduce)');
+let activeCategory=0;
+let categoryFrame=0;
+let pendingCategory=null;
+let categoryScrollTimer;
+function updateCategoryEdges(){
+  const max=categoryTrack.scrollWidth-categoryTrack.clientWidth;
+  const canBack=categoryTrack.scrollLeft>2;
+  const canForward=categoryTrack.scrollLeft<max-2;
+  categoryControls.hidden=max<=2;
+  previousCategory.disabled=!canBack;
+  nextCategory.disabled=!canForward;
+  categoryNav.classList.toggle('can-scroll-back',canBack);
+  categoryNav.classList.toggle('can-scroll-forward',canForward);
+}
+function revealCategory(index){
+  const link=categoryLinks[index];
+  const rail=categoryTrack.getBoundingClientRect();
+  const item=link.getBoundingClientRect();
+  const distance=item.left<rail.left+4?item.left-rail.left-4:item.right>rail.right-4?item.right-rail.right+4:0;
+  if(distance)categoryTrack.scrollBy({left:distance,behavior:reducedCategoryMotion.matches?'instant':'smooth'});
+}
+function setActiveCategory(index){
+  if(activeCategory===index)return;
+  categoryLinks[activeCategory].removeAttribute('aria-current');
+  categoryLinks[index].setAttribute('aria-current','location');
+  activeCategory=index;
+  revealCategory(index);
+}
+function syncCategory(){
+  categoryFrame=0;
+  if(pendingCategory!==null)return;
+  const line=Math.max(0,categoryNav.getBoundingClientRect().bottom)+24;
+  let index=0;
+  categorySections.forEach((section,i)=>{if(section.getBoundingClientRect().top<=line)index=i;});
+  setActiveCategory(index);
+}
+function queueCategorySync(){
+  if(!categoryFrame)categoryFrame=requestAnimationFrame(syncCategory);
+}
+function finishCategoryScroll(){
+  clearTimeout(categoryScrollTimer);
+  categoryScrollTimer=setTimeout(()=>{pendingCategory=null;queueCategorySync();},160);
+}
+categoryTrack.addEventListener('scroll',updateCategoryEdges,{passive:true});
+categoryNav.querySelectorAll('[data-direction]').forEach(button=>button.addEventListener('click',()=>{
+  categoryTrack.scrollBy({left:Number(button.dataset.direction)*categoryTrack.clientWidth*.8,behavior:reducedCategoryMotion.matches?'instant':'smooth'});
+}));
+categoryLinks.forEach((link,i)=>link.addEventListener('click',event=>{
+  if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey||event.button!==0)return;
+  pendingCategory=i;
+  setActiveCategory(i);
+  finishCategoryScroll();
+}));
+window.addEventListener('scroll',()=>{queueCategorySync();if(pendingCategory!==null)finishCategoryScroll();},{passive:true});
+function resizeCategoryNav(){
+  document.documentElement.style.setProperty('--category-nav-offset',`${categoryNav.offsetHeight+12}px`);
+  updateCategoryEdges();
+  queueCategorySync();
+}
+if('ResizeObserver' in window)new ResizeObserver(resizeCategoryNav).observe(categoryNav);
+window.addEventListener('resize',resizeCategoryNav,{passive:true});
+window.addEventListener('hashchange',queueCategorySync);
+window.addEventListener('load',resizeCategoryNav,{once:true});
+resizeCategoryNav();
 

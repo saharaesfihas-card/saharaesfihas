@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261003-doces-v1';
+const CACHE = 'sahara-pwa-20261003-categorias-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
@@ -60,3 +60,4 @@ self.addEventListener('fetch', event => {
     }
   })());
 });
+

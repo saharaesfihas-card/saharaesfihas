@@ -32,4 +32,35 @@
 .payment-methods{min-width:0;margin:22px 0 0;padding:18px 0 0;border:0;border-top:1px solid var(--line)}.payment-methods legend{font-size:15px;font-weight:700;padding:0 8px 0 0}.bag .payment-option{display:flex;gap:12px;align-items:center;margin:10px 0;padding:12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:400}.payment-option input{width:18px;height:18px;flex-shrink:0;accent-color:var(--wine);margin:0}.payment-option span{min-width:0}.payment-option strong{display:block;font-size:14px}.payment-option small{display:block;margin-top:4px;color:#79686e;font-size:12px}.payment-option:has(input:checked){background:#f8eef1;border-color:var(--wine)}.payment-help{font-size:12px;line-height:1.5;color:#79686e;margin:12px 0 0}
 
 /* Navegação e resumo do pedido */
-#category-nav{display:flex;gap:8px;overflow-x:auto;padding:4px 0 16px;margin-bottom:20px}#category-nav a{white-space:nowrap;text-decoration:none;border:1px solid var(--line);border-radius:24px;padding:10px 15px;background:white;color:var(--wine);font-size:14px}.order-summary{display:flex;justify-content:space-between;gap:12px;padding:18px 0;font-size:14px;border-bottom:1px solid var(--line)}.order-summary strong{white-space:nowrap;color:var(--wine)}.cart-line-total{display:block;margin-top:6px;font-size:13px;color:var(--wine)}#quick-order{display:none}@media(max-width:650px){body{padding-bottom:76px}#quick-order:not([hidden]){display:block;position:fixed;bottom:12px;left:16px;right:16px;z-index:10;text-align:center;text-decoration:none;background:var(--wine);color:white;border-radius:10px;padding:16px 12px;box-shadow:0 4px 18px #30202530;font-weight:700;font-size:14px}}
+.order-summary{display:flex;justify-content:space-between;gap:12px;padding:18px 0;font-size:14px;border-bottom:1px solid var(--line)}.order-summary strong{white-space:nowrap;color:var(--wine)}.cart-line-total{display:block;margin-top:6px;font-size:13px;color:var(--wine)}#quick-order{display:none}@media(max-width:650px){body{padding-bottom:76px}#quick-order:not([hidden]){display:block;position:fixed;bottom:12px;left:16px;right:16px;z-index:10;text-align:center;text-decoration:none;background:var(--wine);color:white;border-radius:10px;padding:16px 12px;box-shadow:0 4px 18px #30202530;font-weight:700;font-size:14px}}
+
+/* Categorias: atalhos com destaque que acompanha a leitura do cardápio. */
+:root{--category-nav-offset:124px}
+html{scroll-padding-top:var(--category-nav-offset)}
+#category-nav{position:sticky;top:0;z-index:5;margin:0 0 28px;padding:14px 16px 16px;border:1px solid #eadfda;border-radius:20px;background:rgba(255,252,247,.96);box-shadow:0 6px 24px #48202b08;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.category-nav-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px}
+.category-nav-label{font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:#81676b}
+.category-nav-controls{display:flex;gap:6px}
+.category-nav-controls[hidden]{display:none}
+.category-nav-arrow{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid #e4d6d6;border-radius:50%;background:white;color:var(--wine);transition:background .2s,border-color .2s}
+.category-nav-arrow svg{width:16px;height:16px}
+.category-nav-arrow:hover:not(:disabled){border-color:var(--wine);background:#f4e8eb}
+.category-nav-arrow:disabled{opacity:.3;cursor:default}
+.category-nav-window{position:relative;min-width:0}
+.category-nav-window:before,.category-nav-window:after{content:'';position:absolute;top:0;bottom:0;width:24px;z-index:1;pointer-events:none;opacity:0;transition:opacity .2s}
+.category-nav-window:before{left:0;background:linear-gradient(90deg,var(--paper),transparent)}
+.category-nav-window:after{right:0;background:linear-gradient(270deg,var(--paper),transparent)}
+#category-nav.can-scroll-back .category-nav-window:before,#category-nav.can-scroll-forward .category-nav-window:after{opacity:1}
+.category-nav-track{display:flex;gap:8px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding:4px;scroll-padding-inline:4px}
+.category-nav-track::-webkit-scrollbar{display:none}
+#category-nav .category-link{display:flex;flex-shrink:0;align-items:center;gap:9px;min-height:54px;padding:8px 15px 8px 10px;border:1px solid #e8ddda;border-radius:15px;background:white;color:#695058;text-decoration:none;white-space:nowrap;font-size:14px;font-weight:600;transition:background .2s,color .2s,border-color .2s,box-shadow .2s}
+.category-icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;flex-shrink:0;border-radius:10px;background:#f8f0e8;color:#966741;transition:background .2s,color .2s}
+.category-icon svg{width:19px;height:19px}
+#category-nav .category-link:hover{border-color:#bb929a;background:#fcf5f4;color:var(--wine)}
+#category-nav .category-link[aria-current='location']{border-color:var(--wine);background:linear-gradient(135deg,#7b2a3c,var(--wine));color:white;box-shadow:0 3px 8px #611e2d20}
+.category-link[aria-current='location'] .category-icon{background:#ffffff15;color:var(--gold)}
+#category-nav .category-link:focus-visible{outline:2px solid #c88423;outline-offset:1px}
+.category{scroll-margin-top:12px}
+.bag{top:var(--category-nav-offset)}
+@media(max-width:650px){#category-nav{margin:0 -8px 24px;padding:10px 10px 12px;border-radius:18px}.category-nav-heading{margin-bottom:6px;padding:0 4px}.category-nav-arrow{width:32px;height:32px}#category-nav .category-link{min-height:52px;padding:8px 13px 8px 9px;font-size:13px}.category-icon{width:30px;height:30px;border-radius:9px}}
+@media(prefers-reduced-motion:reduce){#category-nav *{transition:none}}
