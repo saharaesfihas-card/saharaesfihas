@@ -1,10 +1,11 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261003-catupiry-v1';
+const CACHE = 'sahara-pwa-20261003-doces-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
   'logo-sahara.jpg', 'esfihas.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
+  'images/chocolate-profissional.jpg', 'images/doce-leite-profissional.jpg',
   'images/porquinho.jpg', 'images/bacon-queijo.jpg', 'images/bacon.jpg', 'images/brigadeiro.jpg',
   'images/brocolis-queijo.jpg', 'images/calabresa-catupiry.jpg', 'images/calabresa.jpg',
   'images/carne-queijo.png', 'images/carne.jpg', 'images/frango-bacon.jpg',
