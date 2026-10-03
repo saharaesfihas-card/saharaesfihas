@@ -10,7 +10,7 @@ if(!savoryGroup.items.some(item=>item[0]==='ricota'))savoryGroup.items.push(['ri
 const traditionalItems=traditionalIds.map(id=>savoryGroup.items.find(item=>item[0]===id));
 const removedSpecialIds=['frango-requeijao','bacon-queijo','calabresa-mussarela','coalhada'];
 const specialItems=savoryGroup.items.filter(item=>!traditionalIds.includes(item[0])&&!removedSpecialIds.includes(item[0]));
-specialItems.push(['carne-queijo','Carne com queijo','Carne temperada com queijo derretido.']);
+specialItems.unshift(['carne-queijo','Carne com queijo','Carne temperada com queijo derretido.']);
 groups.splice(groups.indexOf(savoryGroup),1,{title:'Esfihas tradicionais',price:savoryGroup.price,items:traditionalItems},{title:'Esfihas especiais',price:savoryGroup.price,items:specialItems});
 const categoryOrder=["Esfihas tradicionais","Esfihas especiais","Esfihas doces","Combos","Bebidas","Shawarma"];
 groups.sort((a,b)=>categoryOrder.indexOf(a.title)-categoryOrder.indexOf(b.title));
