@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261002-v1';
+const CACHE = 'sahara-pwa-20261003-fotos-v2';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
@@ -9,7 +9,8 @@ const ASSETS = [
   'images/brocolis-queijo.jpg', 'images/calabresa-catupiry.jpg', 'images/calabresa.jpg',
   'images/carne-queijo.png', 'images/carne.jpg', 'images/frango-bacon.jpg',
   'images/frango-catupiry.jpg', 'images/frango.jpg', 'images/pizza.png',
-  'images/queijo.jpg', 'images/ricota.png', 'images/sensacao.jpg'
+  'images/queijo.jpg', 'images/ricota.png', 'images/sensacao.jpg',
+  'images/bacon-cheddar.jpg', 'images/bahiana.jpg', 'images/banoffee.jpg', 'images/beijinho.jpg', 'images/bombom-branco.jpg', 'images/brocolis-bacon-queijo.jpg', 'images/cardapio-doces-2.jpg', 'images/cardapio-especiais-1.jpg', 'images/cardapio-especiais-2.jpg', 'images/cardapio-salgadas-2.jpg', 'images/cardapio-salgadas-3.jpg', 'images/cardapio-shawarma.jpg', 'images/charge.jpg', 'images/leite-ninho.jpg', 'images/palmito-queijo.jpg', 'images/romeu-julieta.jpg', 'images/seducao.jpg', 'images/strogonoff-carne.jpg', 'images/vegetariana.jpg'
 ];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(
