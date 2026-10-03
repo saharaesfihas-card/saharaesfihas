@@ -80,7 +80,7 @@ function setActiveCategory(index){
 function syncCategory(){
   categoryFrame=0;
   if(pendingCategory!==null)return;
-  const line=Math.max(0,categoryNav.getBoundingClientRect().bottom)+24;
+  const line=Math.max(0,categoryNav.getBoundingClientRect().bottom)+32;
   let index=0;
   categorySections.forEach((section,i)=>{if(section.getBoundingClientRect().top<=line)index=i;});
   setActiveCategory(index);
