@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261003-categorias-v2';
+const CACHE = 'sahara-pwa-20261003-categorias-v3';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',

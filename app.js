@@ -83,6 +83,7 @@ function syncCategory(){
   const line=Math.max(0,categoryNav.getBoundingClientRect().bottom)+32;
   let index=0;
   categorySections.forEach((section,i)=>{if(section.getBoundingClientRect().top<=line)index=i;});
+  if(window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-2)index=categorySections.length-1;
   setActiveCategory(index);
 }
 function queueCategorySync(){
@@ -113,4 +114,3 @@ window.addEventListener('resize',resizeCategoryNav,{passive:true});
 window.addEventListener('hashchange',queueCategorySync);
 window.addEventListener('load',resizeCategoryNav,{once:true});
 resizeCategoryNav();
-
