@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#611e2d">
+  <title>Gestão · Sahara Esfihas</title>
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="admin.css">
+  <script src="admin.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Ir para o conteúdo</a>
+  <header class="topbar">
+    <a class="brand" href="index.html" aria-label="Abrir o cardápio Sahara"><span class="brand-mark" aria-hidden="true">S</span><span>SAHARA<small>Gestão do delivery</small></span></a>
+    <div class="header-actions"><a href="index.html">Ver cardápio ↗</a><button id="logout" type="button" class="secondary" hidden>Sair</button></div>
+  </header>
+  <p id="notice" role="status" aria-live="polite" class="notice" hidden></p>
+  <main id="activation" class="gate" aria-labelledby="activation-title">
+    <p class="eyebrow">GESTÃO DA LOJA</p><h1 id="activation-title">Conectando ao sistema</h1>
+    <p id="activation-message">Verificando a disponibilidade do servidor seguro.</p>
+    <button id="retry" class="primary" type="button" hidden>Verificar novamente</button>
+  </main>
+  <section id="login-panel" class="gate" aria-labelledby="login-title" hidden>
+    <p class="eyebrow">ACESSO RESTRITO</p><h1 id="login-title">Sua operação, em um só lugar</h1>
+    <p>Entre com a senha de gestão da Sahara. Atendimento somente por delivery, todos os dias, das 18h às 23h.</p>
+    <form id="login-form"><label for="admin-password">Senha da gestão</label><input id="admin-password" name="password" type="password" autocomplete="current-password" required maxlength="200"><button class="primary" type="submit">Entrar no painel</button></form>
+  </section>
+  <div id="workspace" class="workspace" hidden>
+    <aside class="sidebar"><p class="eyebrow">SUA OPERAÇÃO</p><nav id="navigation" aria-label="Gestão da loja"></nav><p class="sidebar-foot">Sahara Esfihas<br>Somente delivery<br>Seg. a dom. · 18h às 23h</p></aside>
+    <main id="content" class="content" tabindex="-1"><div class="page-heading"><div><p class="eyebrow">GESTÃO SAHARA</p><h1 id="screen-title">Pedidos e cozinha</h1><p id="screen-description"></p></div><button id="refresh" class="secondary" type="button">Atualizar dados</button></div><div id="screen" aria-busy="false"></div></main>
+  </div>
+  <section id="print-target" aria-label="Comanda para impressão"></section>
+  <noscript><p class="notice error">Ative o JavaScript do navegador para acessar o painel de gestão.</p></noscript>
+</body>
+</html>

@@ -1,8 +1,8 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261004-horario-delivery-v1';
+const CACHE = 'sahara-pwa-20261004-sistema-delivery-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
-  'index.html', 'style.css', 'app.js', 'address.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
+  'index.html', 'style.css', 'app.js', 'address.js', 'ordering.js', 'ordering.css', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
   'logo-sahara.jpg', 'esfihas.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
   'images/atum.jpg', 'images/carne-seca.jpg', 'images/carne-seca-cream-cheese.jpg',
@@ -38,7 +38,10 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET' || url.origin !== ROOT.origin ||
       !url.pathname.startsWith(ROOT.pathname) || url.pathname.endsWith('/service-worker.js')) return;
   const navigation = request.mode === 'navigate';
-  if (!navigation && !/\.(?:js|css|webmanifest|png|jpg|jpeg|svg|ico)$/.test(url.pathname)) return;
+  // O cache offline guarda somente o cardápio público, nunca a API ou o painel.
+  const relativePath = url.pathname.slice(ROOT.pathname.length);
+  if (navigation && relativePath !== '' && relativePath !== 'index.html') return;
+  if (!navigation && !ASSETS.includes(relativePath)) return;
   const key = navigation ? new URL('index.html', ROOT) : new URL(url.pathname, url.origin);
   // Busca a versão atual primeiro, inclusive preços; usa o cache somente sem resposta da rede.
   event.respondWith((async () => {
@@ -62,4 +65,3 @@ self.addEventListener('fetch', event => {
     }
   })());
 });
-
