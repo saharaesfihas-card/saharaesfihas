@@ -44,11 +44,15 @@ O GitHub Pages publica HTML, CSS, JavaScript e o aplicativo instalável. Ele **n
 
 Para receber os pedidos no painel, hospede o servidor em um serviço com Python, Node.js, disco persistente privado e HTTPS. O mesmo servidor serve o cardápio, o painel e a API. A configuração entregue por ele em `system-config.js` ativa automaticamente `/api` para o cardápio.
 
+Os arquivos `Dockerfile` e `render.yaml` preparam essa implantação. O passo a passo está em [HOSPEDAGEM.md](HOSPEDAGEM.md). É necessário aplicar a configuração na conta do responsável pela loja; os arquivos preparados não significam que o serviço já esteja hospedado. A proposta usa um serviço e um disco pagos, com os valores apresentados pelo provedor antes da ativação.
+
 Também é possível manter o cardápio no GitHub Pages e definir em `system-config.js` um `apiBase` com o endereço HTTPS público da API. Esse arquivo pode conter apenas o endereço do serviço, nunca credenciais. Nesse caso, autorize a origem do cardápio em `SAHARA_ALLOWED_ORIGINS` e abra o painel no domínio do servidor: o painel administrativo usa a API da própria origem.
+
+Atualize esse endereço somente depois de confirmar que o novo serviço responde por HTTPS e que o login do painel funciona. Publique o servidor na raiz do domínio, pois os caminhos da API e da sessão administrativa usam essa estrutura.
 
 ## Executar e configurar
 
-Requisitos: Python 3.12 e Node.js. O Node lê o catálogo real de `app.js` ao iniciar o servidor; os preços enviados pelo navegador não substituem os preços do catálogo.
+Requisitos: Python 3.12, Node.js e dados de fuso horário para `America/Sao_Paulo`. A imagem Docker inclui esses requisitos. O Node lê o catálogo real de `app.js` ao iniciar o servidor; os preços enviados pelo navegador não substituem os preços do catálogo.
 
 Na raiz do projeto:
 
@@ -58,14 +62,19 @@ python3 -m venv .venv
 .venv/bin/python -m server.set_password
 ```
 
-O último comando pede e confirma a senha sem exibi-la, e produz seu hash `scrypt`. Configure esse resultado como segredo `SAHARA_ADMIN_PASSWORD_HASH` no ambiente de execução. Não publique a senha ou o hash, não os coloque no repositório e não os envie pelo chat. Sem essa variável, o login administrativo fica bloqueado.
+O último comando pede e confirma a senha sem exibi-la, e produz seu hash `scrypt`. Configure esse resultado como segredo `SAHARA_ADMIN_PASSWORD_HASH` no ambiente de execução. Não publique a senha ou o hash, não os coloque no repositório e não os envie pelo chat. Sem o hash, o comando Uvicorn usado no exemplo local deixa o login administrativo bloqueado.
+
+Na implantação Docker/Render, `python -m server.run` também aceita `SAHARA_ADMIN_PASSWORD` com pelo menos oito caracteres, informada no campo seguro do provedor. O inicializador gera o hash em memória e retira a senha original do ambiente do processo. Use essa opção **ou** `SAHARA_ADMIN_PASSWORD_HASH`. A execução de produção exige uma credencial válida antes de iniciar.
 
 | Variável | Uso |
 | --- | --- |
-| `SAHARA_ADMIN_PASSWORD_HASH` | Hash gerado pelo comando acima; necessário para entrar no painel. |
+| `SAHARA_ADMIN_PASSWORD` | Senha exclusiva com pelo menos oito caracteres, aceita pelo inicializador `server.run`; é a opção solicitada pelo Blueprint Render. |
+| `SAHARA_ADMIN_PASSWORD_HASH` | Alternativa à senha original: hash gerado pelo comando acima. É a opção usada no exemplo local com Uvicorn direto. |
 | `SAHARA_DATA_DIR` | Diretório privado e persistente do banco, fora da pasta do projeto. Por padrão, usa `.sahara-system-data` ao lado do repositório. |
 | `SAHARA_COOKIE_SECURE` | Padrão `1`, para HTTPS. Use `0` somente em desenvolvimento local por HTTP. |
 | `SAHARA_ALLOWED_ORIGINS` | Origens autorizadas do cardápio, separadas por vírgula. Padrão: `https://saharaesfihas-card.github.io`. Não inclua caminhos de páginas. |
+| `PORT` | Porta do inicializador de produção; padrão `10000`. |
+| `FORWARDED_ALLOW_IPS` | Proxies autorizados a informar protocolo e IP do cliente. Confie apenas no proxy que protege o serviço. |
 
 Para desenvolvimento local, após configurar o hash no ambiente:
 
@@ -76,7 +85,7 @@ export SAHARA_COOKIE_SECURE=0
 
 Abra `http://127.0.0.1:8010/` para o cardápio e `http://127.0.0.1:8010/admin.html` para a gestão. `/api/health` indica se o servidor responde e se a senha administrativa foi configurada. Esse endereço local não publica o sistema na internet.
 
-Em produção, mantenha `SAHARA_COOKIE_SECURE=1`, configure HTTPS e execute o servidor por um gerenciador de processos. Se houver proxy reverso, encaminhe a origem HTTPS corretamente e confie em cabeçalhos de proxy somente do proxy autorizado. O painel deve permanecer no mesmo domínio da API; as alterações exigem sessão e token de proteção contra requisições indevidas.
+Em produção, mantenha `SAHARA_COOKIE_SECURE=1`, configure HTTPS e execute o servidor por um gerenciador de processos ou pelo container entregue. Se houver proxy reverso, preserve o `Host` público, encaminhe o protocolo HTTPS corretamente e confie em cabeçalhos de proxy somente do proxy autorizado. O painel deve permanecer no mesmo domínio da API; as alterações exigem sessão e token de proteção contra requisições indevidas. Um protocolo HTTP informado incorretamente pelo proxy pode causar erro de origem ao entrar no painel.
 
 ## Uso diário
 

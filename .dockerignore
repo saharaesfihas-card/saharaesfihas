@@ -1,0 +1,16 @@
+.git
+.venv
+.env
+.env.*
+.sahara-data
+.sahara-system-data
+**/__pycache__
+**/*.pyc
+**/*.sqlite3
+**/*.sqlite3-wal
+**/*.sqlite3-shm
+tests
+server/tests
+server/requirements-dev.txt
+*.md
+.pytest_cache

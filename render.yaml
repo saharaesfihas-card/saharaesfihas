@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+services:
+  - type: web
+    name: sahara-esfihas-pdv
+    runtime: docker
+    repo: https://github.com/saharaesfihas-card/saharaesfihas
+    branch: main
+    plan: starter
+    region: oregon
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: 'off'
+    disk:
+      name: sahara-pedidos
+      mountPath: /var/lib/sahara
+      sizeGB: 1
+    envVars:
+      - key: SAHARA_ADMIN_PASSWORD
+        sync: false
+      - key: SAHARA_DATA_DIR
+        value: /var/lib/sahara/data
+      - key: SAHARA_COOKIE_SECURE
+        value: '1'
+      - key: SAHARA_ALLOWED_ORIGINS
+        value: https://saharaesfihas-card.github.io
+      # Somente no serviço gerenciado: acesso externo passa pelo proxy do Render.
+      - key: FORWARDED_ALLOW_IPS
+        value: '*'
