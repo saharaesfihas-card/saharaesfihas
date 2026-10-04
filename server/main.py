@@ -301,7 +301,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             if body.status not in TRANSITIONS.get(order['status'], set()):
                 raise HTTPException(409, 'Essa mudança de etapa não é permitida.')
             if body.status == 'cancelled' and (order['payment_status'] == 'paid' or operations.has_receivable_payments(conn, order_id)):
-                raise HTTPException(409, 'O pedido já foi pago. Resolva o estorno financeiro antes de cancelar.')
+                raise HTTPException(409, 'O pedido tem recebimento. O cancelamento com estorno ainda não está disponível no sistema.')
             if body.status == 'confirmed':
                 operations.apply_stock(conn, order)
                 marketing.record_coupon_use(conn, order)

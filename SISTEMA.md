@@ -84,11 +84,11 @@ Em produção, mantenha `SAHARA_COOKIE_SECURE=1`, configure HTTPS e execute o se
 2. Cadastre o estoque que deseja controlar e registre entradas antes de confirmar pedidos. Insumos sem ficha técnica não são consumidos automaticamente.
 3. Confira o pedido e o eventual agendamento antes de confirmá-lo. Atualize as etapas conforme preparo, saída e entrega ocorrerem.
 4. Registre o pagamento somente depois de receber o valor. Esse registro entra no caixa e no relatório; não aciona banco ou operadora de cartão.
-5. Registre fiado e seus recebimentos na tela correspondente. Cada recebimento entra no caixa. Um pedido vinculado com recebimento parcial exige resolver o financeiro antes do cancelamento.
+5. Registre fiado e seus recebimentos na tela correspondente. Cada recebimento entra no caixa. O painel bloqueia o cancelamento de pedidos vinculados que já tenham recebimentos.
 6. Consulte clientes e fidelidade; crie campanhas apenas como rascunhos até haver integração oficial de envio.
 7. Confira as movimentações e feche o caixa com o valor efetivamente contado.
 
-Cancelar um pedido confirmado, antes do preparo, devolve o estoque consumido. Depois do início do preparo, o estoque não retorna automaticamente. Pedidos pagos exigem tratar o estorno financeiro antes do cancelamento; o sistema não realiza estornos em provedores externos.
+Cancelar um pedido confirmado, antes do preparo, devolve o estoque consumido. Depois do início do preparo, o estoque não retorna automaticamente. O painel bloqueia o cancelamento de pedidos pagos ou com recebimento parcial: a rotina de cancelamento com estorno ainda não está disponível. Um ajuste manual no caixa não desbloqueia esse cancelamento e não realiza estorno em provedores externos.
 
 ## Dados e manutenção
 
