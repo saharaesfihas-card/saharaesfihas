@@ -1,8 +1,8 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261004-acebolada-tradicional-v1';
+const CACHE = 'sahara-pwa-20261004-localizacao-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
-  'index.html', 'style.css', 'app.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
+  'index.html', 'style.css', 'app.js', 'address.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
   'logo-sahara.jpg', 'esfihas.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
   'images/atum.jpg', 'images/carne-seca.jpg', 'images/carne-seca-cream-cheese.jpg',

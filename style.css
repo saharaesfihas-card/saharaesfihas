@@ -29,6 +29,19 @@
 @media(max-width:1100px){.product.has-photo{grid-template-columns:88px minmax(0,1fr);gap:12px 16px}.product-photo{width:88px;grid-row:1 / 3;align-self:start}.has-photo .product-quantity{grid-column:2;justify-self:end}}
 
 /* Formas de pagamento */
+.delivery-location{margin-top:14px}
+.location-button,.location-confirm{width:100%;min-height:44px;border:1px solid var(--wine);border-radius:8px;padding:12px;font-size:14px;font-weight:600}
+.location-button{color:var(--wine);background:#f8eef1}
+.location-button::before{content:'◎';font-size:19px;margin-right:8px;vertical-align:middle}
+.location-button:disabled{opacity:.65;cursor:wait}
+.location-help,.location-status{font-size:12px;line-height:1.6;margin:8px 0;color:#79686e}
+.location-status{color:var(--wine)}
+.location-card{padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.location-card strong{font-size:14px}
+.location-card a{display:inline-block;margin:4px 0 12px;color:var(--wine);font-size:14px}
+.location-confirm{background:var(--wine);color:white}
+.location-confirm:disabled{opacity:.65;cursor:wait}
+.location-remove{display:block;min-height:44px;margin:6px auto 0;padding:8px 12px;border:0;background:transparent;color:var(--wine);font-size:13px;text-decoration:underline}
 .payment-methods{min-width:0;margin:22px 0 0;padding:18px 0 0;border:0;border-top:1px solid var(--line)}.payment-methods legend{font-size:15px;font-weight:700;padding:0 8px 0 0}.bag .payment-option{display:flex;gap:12px;align-items:center;margin:10px 0;padding:12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:400}.payment-option input{width:18px;height:18px;flex-shrink:0;accent-color:var(--wine);margin:0}.payment-option span{min-width:0}.payment-option strong{display:block;font-size:14px}.payment-option small{display:block;margin-top:4px;color:#79686e;font-size:12px}.payment-option:has(input:checked){background:#f8eef1;border-color:var(--wine)}.payment-help{font-size:12px;line-height:1.5;color:#79686e;margin:12px 0 0}
 
 /* Navegação e resumo do pedido */
