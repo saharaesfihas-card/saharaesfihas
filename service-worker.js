@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261004-localizacao-v1';
+const CACHE = 'sahara-pwa-20261004-horario-delivery-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'address.js', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
