@@ -24,7 +24,7 @@ function change(id,delta){if(!catalog.some(p=>p.id===id)||!Number.isInteger(delt
 function snapshot(){return [...cart].map(([id,quantity])=>({id,name:catalog.find(p=>p.id===id).name,priceCents:catalog.find(p=>p.id===id).priceCents,quantity}));}
 function render(){for(const product of catalog){const quantity=cart.get(product.id)||0;const output=document.querySelector('[data-quantity="'+product.id+'"]');output.value=String(quantity);const controls=output.parentElement;controls.querySelector('[data-delta="-1"]').disabled=quantity===0;controls.querySelector('[data-delta="1"]').disabled=quantity===99;controls.classList.toggle('has-items',quantity>0);}const rows=snapshot();const count=rows.reduce((s,x)=>s+x.quantity,0);const total=rows.reduce((s,x)=>s+x.quantity*x.priceCents,0);document.querySelector('#order-total').textContent=money(total);document.querySelector('#quick-order').hidden=count===0;document.querySelector('#quick-order').textContent=`Ver pedido · ${count} ${count===1?'item':'itens'} · ${money(total)}`;try{localStorage.setItem('sahara-cart',JSON.stringify([...cart]));}catch{}document.querySelector('#count').textContent=count;document.querySelector('#checkout').disabled=count===0;document.querySelector('#bag-items').innerHTML=rows.length?rows.map(p=>`<div class="cart-row"><strong>${p.name}</strong><span class="cart-line-total">${money(p.quantity*p.priceCents)}</span><div class="quantity"><button data-change="${p.id}" data-delta="-1" aria-label="Remover uma unidade de ${p.name}">−</button><span aria-label="Quantidade">${p.quantity}</span><button data-change="${p.id}" data-delta="1" ${p.quantity>=99?'disabled':''} aria-label="Adicionar uma unidade de ${p.name}">+</button></div></div>`).join(''):'<div class="empty">Seu pedido começa por aqui.<br>Toque no + ao lado de um sabor.</div>';document.querySelector('#announcement').textContent=`${count} itens no pedido.`;}
 document.addEventListener('click',e=>{const add=e.target.closest('[data-add]');const edit=e.target.closest('[data-change]');try{if(add)change(add.dataset.add,1);if(edit)change(edit.dataset.change,Number(edit.dataset.delta));}catch(error){document.querySelector('#announcement').textContent=error.message;}});
-function prepareCheckout(schedule = {}) {
+function prepareCheckout() {
   const rows = snapshot();
   if (!rows.length) return null;
   const form = document.querySelector('#delivery-form');
@@ -51,8 +51,6 @@ function prepareCheckout(schedule = {}) {
     fulfillment: delivery ? 'delivery' : 'pickup',
     paymentMethod: form.querySelector('input[name="payment"]:checked')?.value || '',
     notes: read('notes'),
-    requestedFor: schedule.requestedFor || null,
-    scheduleLabel: schedule.label || '',
   };
   prepared.message = checkoutMessage(prepared);
   return prepared;
@@ -75,8 +73,6 @@ function checkoutMessage(prepared, registeredOrder = null) {
     ...prepared.rows.map(row => `${row.quantity}x ${row.name} — ${money(row.quantity * row.priceCents)}`), '',
     `${registeredOrder ? 'Valor dos produtos registrado' : 'Subtotal dos produtos'}: ${money(registeredOrder ? registeredOrder.total_cents : prepared.totalCents)}`,
     ...addressLines,
-    ...(prepared.scheduleLabel ? ['', `Agendamento solicitado: ${prepared.scheduleLabel} (horário de Maringá).`,
-      'A data e o horário dependem da confirmação da loja.'] : []),
     ...(prepared.customer.name ? ['', `Nome: ${prepared.customer.name}`] : []),
     ...(prepared.customer.phone ? [`Telefone: ${prepared.customer.phone}`] : []),
     ...(prepared.paymentMethod ? ['', `Forma de pagamento: ${prepared.paymentMethod}`] : []),

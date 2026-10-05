@@ -107,16 +107,6 @@ async function address(page) {
   }
 }
 
-async function schedule(page, date, time) {
-  await page.locator('#order-timing').selectOption('scheduled');
-  await page.locator('#schedule-date').fill(date);
-  await page.locator('#schedule-time').fill(time);
-}
-
-async function validation(page, now) {
-  return page.evaluate(now => window.saharaOrdering.validateSchedule(now ? new Date(now) : undefined), now);
-}
-
 async function whatsappMessage(page) {
   const { opened, navigated } = await page.evaluate(() => ({ opened: window.__opened, navigated: window.__navigated }));
   const urls = [...opened.map(item => item[0]), ...navigated];
@@ -163,54 +153,23 @@ async function run() {
     assert.equal(unchanged[0].quantity, 1);
   });
 
-  await test('Scheduling uses the business date, even on a phone in another timezone', async page => {
-    const dates = await page.evaluate(() => [
-      window.saharaOrdering.businessDate(new Date('2026-10-04T02:30:00Z')),
-      window.saharaOrdering.businessDate(new Date('2026-10-04T03:30:00Z')),
-    ]);
-    assert.deepEqual(dates, ['2026-10-03', '2026-10-04']);
-    assert.equal(await page.locator('#schedule-date').getAttribute('min'), '2026-10-04');
-    assert.equal(await page.locator('#schedule-date').getAttribute('max'), '2026-10-11');
-    await schedule(page, '2026-10-04', '18:00');
-    const result = await validation(page);
-    assert.ok(!result.error, `18:00 must be accepted: ${result.error}`);
-    assert.equal(new Date(result.requestedFor).toISOString(), '2026-10-04T21:00:00.000Z');
-    assert.match(result.label, /18:00/);
+  await test('Checkout no longer offers scheduling, including after restoring an old draft', async page => {
+    assert.equal(await page.locator('#order-timing, #schedule-fields, #schedule-date, #schedule-time').count(), 0);
+    assert.doesNotMatch(await page.locator('#delivery-form').innerText(), /Quando deseja receber|Solicitar agendamento/);
+    await page.evaluate(() => {
+      sessionStorage.setItem('sahara-update-draft', JSON.stringify({
+        'order-timing': 'scheduled', 'schedule-date': '2026-10-05', 'schedule-time': '18:30',
+        street: 'Rua das Flores', 'house-number': '123', neighborhood: 'Jardim Alvorada',
+      }));
+    });
+    await page.reload({ waitUntil: 'load' });
+    assert.equal(await page.locator('#order-timing, #schedule-date, #schedule-time').count(), 0);
+    await page.locator('#checkout').click();
+    assert.doesNotMatch(await whatsappMessage(page), /agendamento|18:30/i);
   });
 
-  await test('Scheduling accepts opening and closing time, but rejects outside hours or the past', async page => {
-    await schedule(page, '2026-10-04', '17:59');
-    assert.ok((await validation(page)).error);
-    await page.locator('#schedule-time').fill('18:00');
-    assert.ok(!(await validation(page)).error);
-    await page.locator('#schedule-time').fill('22:59');
-    assert.ok(!(await validation(page)).error);
-    await page.locator('#schedule-time').fill('23:00');
-    assert.ok(!(await validation(page)).error);
-    await page.locator('#schedule-time').fill('23:01');
-    assert.ok((await validation(page)).error);
-    await page.locator('#schedule-time').fill('18:00');
-    assert.ok((await validation(page, '2026-10-04T22:00:00Z')).error, 'A time earlier today is not a future order');
-  });
-
-  await test('Scheduling permits seven days ahead and rejects an eighth day or a missing date', async page => {
-    await schedule(page, '2026-10-11', '18:00');
-    assert.ok(!(await validation(page)).error);
-    await page.locator('#schedule-date').fill('2026-10-12');
-    assert.ok((await validation(page)).error);
-    await page.locator('#schedule-date').fill('2026-10-03');
-    assert.ok((await validation(page)).error);
-    await page.locator('#schedule-date').fill('');
-    assert.ok((await validation(page)).error);
-    await page.locator('#order-timing').selectOption('now');
-    const now = await validation(page);
-    assert.ok(!now.error);
-    assert.equal(now.requestedFor, null);
-  });
-
-  await test('Manual checkout includes the selected schedule, address, products and payment', async page => {
+  await test('Manual checkout includes address, products and payment without scheduling', async page => {
     await address(page);
-    await schedule(page, '2026-10-05', '18:30');
     await page.locator('input[name="payment"][value="Pix"]').check();
     await page.locator('#notes').fill('Sem cebola');
     await page.locator('#checkout').click();
@@ -220,18 +179,10 @@ async function run() {
     assert.match(message, /Rua das Flores/);
     assert.match(message, /123/);
     assert.match(message, /Jardim Alvorada/);
-    assert.match(message, /18:30/);
+    assert.doesNotMatch(message, /agendamento|18:30/i);
     assert.match(message, /Pix/);
     assert.match(message, /Sem cebola/);
     assert.match(message, /confirm/i, 'A message is a request for confirmation, not a confirmed order');
-  });
-
-  await test('An invalid scheduled order never opens WhatsApp', async page => {
-    await address(page);
-    await schedule(page, '2026-10-04', '23:01');
-    await page.locator('#checkout').click();
-    assert.equal(await page.evaluate(() => window.__opened.length), 0);
-    assert.equal(await page.evaluate(() => window.__navigated.length), 0);
   });
 
   await test('The local assistant answers business facts and never claims online payment or sent orders', async page => {
@@ -241,6 +192,8 @@ async function run() {
     ].map(question => [question, window.saharaOrdering.answer(question)])));
     assert.match(answers['Qual o horário?'], /18[:h]00|18h/);
     assert.match(answers['Qual o horário?'], /23[:h]00|23h/);
+    assert.doesNotMatch(answers['Qual o horário?'], /agendamento|agendar/i);
+    assert.doesNotMatch(answers['Como fazer um pedido?'], /agendamento|agendar/i);
     assert.match(answers['Vocês fazem entrega?'], /delivery|entrega/i);
     assert.match(answers['Posso pagar com Pix?'], /Pix/i);
     assert.match(answers['Posso pagar com Pix?'], /WhatsApp|loja|combin|confirm/i);
@@ -271,7 +224,6 @@ async function run() {
 
   await test('API checkout registers one order while duplicate clicks are pending', async page => {
     await address(page);
-    await schedule(page, '2026-10-05', '18:30');
     const requests = [];
     let release;
     const responseReady = new Promise(resolve => { release = resolve; });
@@ -294,7 +246,7 @@ async function run() {
     assert.match(request.postData(), /Rua das Flores/);
     const payload = request.postDataJSON();
     assert.equal(payload.customer.marketing_opt_in, false, 'Offers require an explicit opt-in');
-    assert.equal(new Date(payload.requested_for).toISOString(), '2026-10-05T21:30:00.000Z');
+    assert.equal(payload.requested_for, null);
     assert.equal(payload.delivery.location, null);
     release();
     await page.waitForFunction(() => window.__navigated.some(url => url.startsWith('https://wa.me/')));

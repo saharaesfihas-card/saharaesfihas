@@ -5,24 +5,6 @@
   const form = document.querySelector('#delivery-form');
   if (!checkout || !form) return;
   const payment = form.querySelector('.payment-methods');
-  const timingSection = document.createElement('fieldset');
-  timingSection.className = 'ordering-fields';
-  timingSection.innerHTML = `
-    <legend>Quando deseja receber?</legend>
-    <label for="order-timing">Horário do pedido</label>
-    <select id="order-timing" name="order-timing" aria-describedby="schedule-help">
-      <option value="now">Assim que possível</option>
-      <option value="scheduled">Solicitar agendamento</option>
-    </select>
-    <div id="schedule-fields" hidden>
-      <label for="schedule-date">Data da entrega</label>
-      <input id="schedule-date" name="schedule-date" type="date" disabled>
-      <label for="schedule-time">Horário da entrega</label>
-      <input id="schedule-time" name="schedule-time" type="time" min="18:00" max="23:00" step="60" disabled>
-    </div>
-    <p id="schedule-help" class="ordering-note">Delivery de segunda a domingo, das 18h às 23h, no horário de Maringá. O agendamento é uma solicitação e depende da confirmação da loja.</p>`;
-  form.insertBefore(timingSection, payment);
-
   const contactSection = document.createElement('fieldset');
   contactSection.className = 'ordering-fields';
   contactSection.innerHTML = `
@@ -49,67 +31,8 @@
   status.insertAdjacentElement('afterend', links);
   const whatsappLink = links.querySelector('#order-whatsapp');
   const trackingLink = links.querySelector('#order-tracking');
-  const timing = document.querySelector('#order-timing');
-  const dateField = document.querySelector('#schedule-date');
-  const timeField = document.querySelector('#schedule-time');
-  const dateFormatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
-  });
   let pending = false;
   let attempt = null;
-
-  function businessDate(value = new Date()) {
-    const parts = Object.fromEntries(dateFormatter.formatToParts(value).map(part => [part.type, part.value]));
-    return `${parts.year}-${parts.month}-${parts.day}`;
-  }
-  function plusDays(value, days) {
-    const [year, month, day] = value.split('-').map(Number);
-    return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
-  }
-  function updateSchedule(now = new Date()) {
-    const scheduled = timing.value === 'scheduled';
-    document.querySelector('#schedule-fields').hidden = !scheduled;
-    for (const field of [dateField, timeField]) {
-      field.disabled = !scheduled;
-      field.required = scheduled;
-      field.setCustomValidity('');
-    }
-    dateField.min = businessDate(now);
-    dateField.max = plusDays(dateField.min, 7);
-  }
-  function validateSchedule(now = new Date()) {
-    updateSchedule(now);
-    if (timing.value !== 'scheduled') return { requestedFor: null, label: '', error: '' };
-    const fail = (field, error) => {
-      field.setCustomValidity(error);
-      return { requestedFor: null, label: '', error };
-    };
-    if (!dateField.value) return fail(dateField, 'Escolha a data desejada para a entrega.');
-    if (!timeField.value) return fail(timeField, 'Escolha o horário desejado para a entrega.');
-    if (dateField.value < dateField.min || dateField.value > dateField.max) {
-      return fail(dateField, 'Escolha uma data entre hoje e os próximos 7 dias.');
-    }
-    if (timeField.value < '18:00' || timeField.value > '23:00') {
-      return fail(timeField, 'Escolha um horário entre 18h e 23h, no horário de Maringá.');
-    }
-    // Maringá uses UTC−03:00 throughout the supported seven-day window.
-    // Confirm the resulting local day with Intl instead of using the device timezone.
-    const requested = new Date(`${dateField.value}T${timeField.value}:00-03:00`);
-    if (!Number.isFinite(requested.getTime()) || businessDate(requested) !== dateField.value) {
-      return fail(dateField, 'Escolha uma data válida para a entrega.');
-    }
-    if (requested.getTime() <= now.getTime()) {
-      return fail(timeField, 'Escolha uma data e um horário futuros para solicitar o agendamento.');
-    }
-    const [year, month, day] = dateField.value.split('-');
-    return {
-      requestedFor: requested.toISOString(), label: `${day}/${month}/${year} às ${timeField.value}`, error: '',
-    };
-  }
-  timing.addEventListener('change', () => updateSchedule());
-  for (const field of [dateField, timeField]) field.addEventListener('input', () => field.setCustomValidity(''));
-  updateSchedule();
-  document.addEventListener('sahara:delivery-restored', () => updateSchedule());
 
   function announce(message, failed = false) {
     status.textContent = message;
@@ -164,13 +87,7 @@
 
   async function submitOrder() {
     if (pending) return;
-    const schedule = validateSchedule();
-    if (schedule.error) {
-      announce(schedule.error, true);
-      form.reportValidity();
-      return;
-    }
-    const prepared = checkout.prepare(schedule);
+    const prepared = checkout.prepare();
     if (!prepared) return;
     const configuration = apiConfiguration();
     if (configuration.error) {
@@ -185,7 +102,7 @@
     const payload = {
       items: prepared.items, customer: prepared.customer, delivery: prepared.delivery,
       payment_method: prepared.paymentMethod, notes: prepared.notes,
-      requested_for: prepared.requestedFor, coupon_code: null,
+      requested_for: null, coupon_code: null,
     };
     const fingerprint = JSON.stringify({ apiBase: configuration.url, payload });
     if (!attempt || attempt.fingerprint !== fingerprint) {
@@ -250,7 +167,7 @@
       return `${product.name}: ${checkout.money(product.priceCents)}.${product.description ? ' ' + product.description : ''} A loja confirma a disponibilidade.`;
     }
     if (/horario|funciona|aberto|abre|fecha|hours/.test(input)) {
-      return 'A Sahara atende somente por delivery, de segunda a domingo, das 18h às 23h, no horário de Maringá. Você pode solicitar um agendamento para os próximos 7 dias; a loja confirma a data e o horário.';
+      return 'A Sahara atende somente por delivery, de segunda a domingo, das 18h às 23h, no horário de Maringá.';
     }
     if (/pagar|pagamento|pix|cartao|dinheiro|payment/.test(input)) {
       return 'Você pode indicar Pix, dinheiro, cartão de crédito ou cartão de débito. Para Pix, combine os dados com a loja pelo WhatsApp. O cardápio não cobra seu cartão nem confirma pagamento online.';
@@ -259,7 +176,7 @@
       return 'Atendemos somente por delivery, com entrega grátis na região de Maringá. Digite rua, número e bairro ou use sua localização, confira o ponto no mapa e confirme. Informe sempre o número da casa. A loja confirma se atende o endereço e o prazo.';
     }
     if (/pedido|pedir|sacola|agendar|agendamento|order/.test(input)) {
-      return 'Toque em + para escolher os produtos e revise a sacola. Informe o endereço ou confirme sua localização, escolha como deseja pagar e toque em Continuar no WhatsApp. Para agendar, escolha uma data e um horário entre 18h e 23h. Revise e envie a mensagem; a loja confirma a solicitação. Você não precisa criar uma conta.';
+      return 'Toque em + para escolher os produtos e revise a sacola. Informe o endereço ou confirme sua localização, escolha como deseja pagar e toque em Continuar no WhatsApp. Revise e envie a mensagem; a loja confirma a solicitação. Você não precisa criar uma conta.';
     }
     if (/cardapio|sabores|menu|preco|valor|combos|bebidas/.test(input)) {
       const categories = [...new Set(catalog.map(item => item.category))].join(', ');
@@ -338,5 +255,5 @@
   });
   questionField.addEventListener('input', () => questionField.setCustomValidity(''));
 
-  window.saharaOrdering = { checkout: submitOrder, validateSchedule, businessDate, answer };
+  window.saharaOrdering = { checkout: submitOrder, answer };
 })();
