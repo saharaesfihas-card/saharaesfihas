@@ -1,0 +1,67 @@
+# Preparação para VPS com Docker Compose. Não cria recursos na Hostinger.
+name: sahara-hostinger
+
+services:
+  app:
+    image: sahara-pdv:hostinger
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PORT: '10000'
+      SAHARA_ADMIN_PASSWORD: ${SAHARA_ADMIN_PASSWORD:?Defina a senha administrativa no arquivo .env privado.}
+      SAHARA_DATA_DIR: /var/lib/sahara/data
+      SAHARA_COOKIE_SECURE: '1'
+      SAHARA_ALLOWED_ORIGINS: ${SAHARA_ALLOWED_ORIGINS:-https://saharaesfihas-card.github.io}
+      # Somente o Caddy acessa o app: esta porta não é publicada no host.
+      FORWARDED_ALLOW_IPS: '*'
+    volumes:
+      - pedidos:/var/lib/sahara
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    networks:
+      - backend
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2-alpine@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SAHARA_DOMAIN: ${SAHARA_DOMAIN:?Defina o domínio ou subdomínio da loja no arquivo .env.}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile.hostinger:/etc/caddy/Caddyfile:ro
+      - certificados:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - backend
+      - internet
+
+networks:
+  backend:
+    internal: true
+  internet: {}
+
+volumes:
+  pedidos:
+    name: sahara-hostinger-pedidos
+  certificados:
+    name: sahara-hostinger-certificados
+  caddy_config:
+    name: sahara-hostinger-caddy-config

@@ -14,3 +14,10 @@ server/tests
 server/requirements-dev.txt
 *.md
 .pytest_cache
+android
+downloads
+*.jks
+*.keystore
+*.p12
+*.idsig
+store-password

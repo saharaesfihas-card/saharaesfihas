@@ -1,0 +1,8 @@
+{
+	admin off
+}
+
+{$SAHARA_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:10000
+}

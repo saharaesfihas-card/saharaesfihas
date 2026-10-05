@@ -2,6 +2,12 @@
 
 O projeto está preparado para hospedar o cardápio, o painel de gestão e a API juntos, com HTTPS e banco persistente. **Esta preparação não cria uma hospedagem:** é necessário aplicar a configuração na conta do responsável pela loja. O ambiente de trabalho do Codex não é um servidor permanente para a operação.
 
+## Opção Hostinger VPS
+
+A preparação para um VPS com Docker Compose e Caddy está em [HOSTINGER.md](HOSTINGER.md). Ela inclui `compose.hostinger.yaml`, `Caddyfile.hostinger` e `.env.hostinger.example`, com HTTPS, aplicação interna e volumes persistentes. A ativação depende de acesso ao VPS e de um domínio ou subdomínio apontando ao servidor. Os recursos disponíveis em outro plano da Hostinger precisam ser confirmados no plano contratado.
+
+O Render permanece como alternativa abaixo. Nenhum dos caminhos cria hospedagem somente pela presença desses arquivos no repositório.
+
 ## Ativação pelo Render
 
 Use o botão abaixo depois que os arquivos de hospedagem estiverem publicados na branch `main` do repositório:
