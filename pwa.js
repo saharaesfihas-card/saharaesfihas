@@ -12,7 +12,7 @@
   let updating = false;
 
   function displayInstall() {
-    installCard.hidden = installed.matches || navigator.standalone === true;
+    installCard.hidden = installed.matches || navigator.standalone === true || navigator.userAgent.includes('SaharaAndroid/');
   }
   displayInstall();
   installed.addEventListener('change', displayInstall);

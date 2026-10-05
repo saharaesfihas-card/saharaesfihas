@@ -1,0 +1,21 @@
+[
+  {
+    "url": "https://dl.google.com/android/repository/build-tools_r35.0.1_linux.zip",
+    "checksum": "e009a9b188cfeb1d2b4c318ab5cb4f1ddc368861",
+    "checksum_type": null,
+    "size": "61959297",
+    "sha256": "5993499f3229a021b89f87088c57242aeefaa62316bf3d69da7de40bfd5350f1"
+  },
+  {
+    "url": "https://dl.google.com/android/repository/platform-35_r02.zip",
+    "checksum": "0bb560a90a7a2cbd0dd8348224d518b638fe7949",
+    "checksum_type": null,
+    "size": "64273788",
+    "sha256": "0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0"
+  },
+  {
+    "url": "https://repo.maven.apache.org/maven2/org/eclipse/jdt/ecj/3.42.0/ecj-3.42.0.jar",
+    "checksum": "22b170025f5e0d849d07f4a84d421e42fae701bf",
+    "sha256": "29f6d3918ee02db4400c103bc25dd90a22491c3a395867d9393070cb96a7dd29"
+  }
+]

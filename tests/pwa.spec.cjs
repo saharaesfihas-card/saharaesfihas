@@ -15,6 +15,7 @@ const baseURL = process.env.SAHARA_TEST_URL || 'http://127.0.0.1:8010';
     await page.goto(baseURL);
     await page.waitForFunction(() => !!navigator.serviceWorker.controller);
     assert.equal(await page.locator('.product').count(), 55);
+    assert.equal(await page.locator('#app-install').isVisible(), true);
     await page.locator('[data-change="carne"][data-delta="1"]').first().click();
     await page.reload();
     assert.equal(await page.locator('#count').innerText(), '1');
@@ -73,5 +74,14 @@ const baseURL = process.env.SAHARA_TEST_URL || 'http://127.0.0.1:8010';
     assert.deepEqual(errors, []);
     console.log('PASS: cardápio abre offline e bloqueia o envio enquanto mantém a sacola');
     await context.close();
+    const nativeContext = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/133.0.0.0 Mobile Safari/537.36 SaharaAndroid/1',
+    });
+    const nativePage = await nativeContext.newPage();
+    await nativePage.goto(baseURL);
+    assert.equal(await nativePage.locator('#app-install').isVisible(), false);
+    assert.equal(await nativePage.locator('.product').count(), 55);
+    console.log('PASS: o APK abre o cardápio sem pedir uma segunda instalação');
+    await nativeContext.close();
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

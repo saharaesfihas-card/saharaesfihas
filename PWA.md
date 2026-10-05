@@ -2,13 +2,23 @@
 
 App para clientes, publicado em https://saharaesfihas-card.github.io/saharaesfihas/?app=1.
 
-## Instalação
+## Instalação pelo navegador
 
 - Android: abra no Chrome, toque em **Instalar app** e confirme. Se necessário, use o menu ⋮ → **Instalar app** ou **Adicionar à tela inicial**.
 - iPhone: abra no Safari e use **Compartilhar** → **Adicionar à Tela de Início**.
 - Computador: abra no Chrome ou Edge e use o botão de instalação da barra de endereço.
 
-Não é preciso baixar um APK. O Sahara abre pela tela inicial em uma janela própria quando instalado como app.
+O Sahara abre pela tela inicial em uma janela própria quando instalado como PWA. Essa opção continua disponível sem baixar um APK.
+
+## APK Android
+
+Também há um [APK Sahara 2026.10.04](https://saharaesfihas-card.github.io/saharaesfihas/downloads/sahara-esfihas-2026.10.04.apk). Ele atende Android 6.0 ou superior e abre o site atual em uma WebView. Não é preciso instalar as duas versões. No APK, a primeira abertura exige internet e o cache depende do Android System WebView instalado; pedidos pelo WhatsApp precisam de conexão.
+
+Ao abrir mapas ou continuar no WhatsApp, o APK apresenta o seletor do Android. O cliente escolhe o aplicativo, revisa a mensagem e a envia. A permissão de localização aparece somente após tocar em **Usar minha localização**, e o endereço manual continua disponível se ela for negada.
+
+O APK não hospeda o PDV nem ativa IA ou pagamentos online. O servidor de gestão e as integrações precisam ser configurados separadamente. Não havia assinatura anterior para comparar, portanto não é garantida a atualização sobre um APK antigo. A versão atual foi compilada e teve assinatura e manifesto verificados; GPS e WhatsApp ainda precisam de teste em aparelho Android.
+
+Consulte [`android/README.md`](android/README.md) para identificação do pacote, checksums, compilação e preservação privada da chave de assinatura.
 
 ## Pedido
 
@@ -22,7 +32,7 @@ A sacola é salva no navegador/dispositivo. Após a primeira visita online e a p
 
 ## Atualizações
 
-O service worker busca os arquivos da rede primeiro para exibir preços atuais e usa o cache quando a conexão falha. Uma nova versão do worker apresenta **Atualizar app**; a sacola permanece salva e o formulário da aba é recuperado após essa atualização.
+O service worker busca os arquivos da rede primeiro para exibir preços atuais e usa o cache quando a conexão falha. Uma nova versão do worker apresenta **Atualizar app**; a sacola permanece salva e o formulário da aba é recuperado após essa atualização. No APK, isso depende do suporte do Android System WebView; mudanças no código Android exigem instalar um novo APK assinado com a mesma chave.
 
 Arquivos: `manifest.webmanifest`, `service-worker.js`, `pwa.js`, `pwa.css` e `icons/`. O manifesto e os caminhos usam o escopo `/saharaesfihas/` do GitHub Pages. Ao mudar a lista de arquivos do cache, altere também a versão `CACHE` no worker. O `app.js` continua contendo o cardápio, as fotos e os preços usados pelo Sahara Admin.
 
