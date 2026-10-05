@@ -2,15 +2,16 @@
 
 A Sahara atende somente por delivery, em Maringá, de segunda a domingo, das 18h às 23h, no fuso `America/Sao_Paulo`. O cliente pode usar o cardápio sem criar conta. A loja confirma disponibilidade, endereço, prazo e pagamento.
 
+O [painel do PDV](https://sahara-esfihas-pdv.onrender.com/admin.html) e a API estão hospedados no Render. O [cardápio e aplicativo para clientes](https://saharaesfihas-card.github.io/saharaesfihas/) usam essa API para registrar as solicitações.
+
 ## O que está implementado
 
 | Recurso | Comportamento atual |
 | --- | --- |
-| Cardápio e sacola | Produtos, preços e pedido preparado para envio pelo cliente ao WhatsApp. |
+| Cardápio e sacola | Produtos, preços, registro da solicitação no PDV e mensagem preparada para envio pelo cliente ao WhatsApp. |
 | Endereço e localização | Endereço manual ou ponto de localização conferido e confirmado pelo cliente; o número da casa continua obrigatório. |
-| Solicitação de agendamento | Data e horário futuros, até sete dias à frente, entre 18h e 23h. Depende da confirmação da loja. |
 | Ajuda no cardápio | Respostas locais sobre produtos, horário, entrega e como pedir. Não é um chatbot com IA nem atende conversas no WhatsApp. |
-| Pedidos, PDV e cozinha | Com o servidor ativo, registro persistente de pedidos, histórico e etapas operadas pela loja. O PDV registra pedidos recebidos por telefone ou WhatsApp. |
+| Pedidos, PDV e cozinha | Registro persistente de pedidos, histórico e etapas operadas pela loja. O PDV também registra pedidos recebidos por telefone ou WhatsApp. |
 | Estoque | Itens, entradas, saídas e indicação de reposição no painel. A API também permite cadastrar fichas técnicas; a confirmação do pedido consome o estoque configurado. Produtos sem vínculo de estoque não têm disponibilidade controlada. |
 | Caixa e fiado | Abertura, fechamento, movimentações, registro manual de pagamento e recebimentos de fiado. Registrar um recebimento não realiza uma cobrança online. |
 | Clientes e RFV | Cadastro, histórico e segmentação por recência, frequência e valor de pedidos entregues e pagos. |
@@ -40,15 +41,13 @@ Esses serviços exigem contas, autorização e configuração dos respectivos pr
 
 ## Site estático e servidor de gestão
 
-O GitHub Pages publica HTML, CSS, JavaScript e o aplicativo instalável. Ele **não executa o servidor Python**. Nessa hospedagem, o pedido continua pelo WhatsApp; o painel mostra a pendência de ativação quando não encontra a API.
+O GitHub Pages publica HTML, CSS, JavaScript e o aplicativo instalável. As solicitações são enviadas para `https://sahara-esfihas-pdv.onrender.com/api`; depois do registro, o cliente revisa e envia a mensagem no WhatsApp. O checkout não oferece agendamento.
 
-Para receber os pedidos no painel, hospede o servidor em um serviço com Python, Node.js, disco persistente privado e HTTPS. O mesmo servidor serve o cardápio, o painel e a API. A configuração entregue por ele em `system-config.js` ativa automaticamente `/api` para o cardápio.
+O servidor Render executa Python e Node.js, mantém os pedidos em SQLite privado e serve o cardápio, o painel e a API por HTTPS. A configuração entregue pelo servidor em `system-config.js` usa `/api` para o seu próprio cardápio.
 
-Os arquivos `Dockerfile` e `render.yaml` preparam essa implantação. O passo a passo está em [HOSPEDAGEM.md](HOSPEDAGEM.md). É necessário aplicar a configuração na conta do responsável pela loja; os arquivos preparados não significam que o serviço já esteja hospedado. A proposta usa um serviço e um disco pagos, com os valores apresentados pelo provedor antes da ativação.
+O painel administrativo deve ser aberto em `https://sahara-esfihas-pdv.onrender.com/admin.html`, usando a senha configurada no Render. O painel usa a API e o cookie seguro da própria origem.
 
-Também é possível manter o cardápio no GitHub Pages e definir em `system-config.js` um `apiBase` com o endereço HTTPS público da API. Esse arquivo pode conter apenas o endereço do serviço, nunca credenciais. Nesse caso, autorize a origem do cardápio em `SAHARA_ALLOWED_ORIGINS` e abra o painel no domínio do servidor: o painel administrativo usa a API da própria origem.
-
-Atualize esse endereço somente depois de confirmar que o novo serviço responde por HTTPS e que o login do painel funciona. Publique o servidor na raiz do domínio, pois os caminhos da API e da sessão administrativa usam essa estrutura.
+O arquivo `system-config.js` do GitHub Pages contém somente o endereço público da API. A origem do cardápio está autorizada em `SAHARA_ALLOWED_ORIGINS`; credenciais permanecem no servidor. Antes de mudar esse destino, confira HTTPS, saúde, catálogo e autorização da origem. Os detalhes de implantação e manutenção estão em [HOSPEDAGEM.md](HOSPEDAGEM.md).
 
 ## Executar e configurar
 
@@ -91,7 +90,7 @@ Em produção, mantenha `SAHARA_COOKIE_SECURE=1`, configure HTTPS e execute o se
 
 1. Entre em `admin.html` e abra o caixa.
 2. Cadastre o estoque que deseja controlar e registre entradas antes de confirmar pedidos. Insumos sem ficha técnica não são consumidos automaticamente.
-3. Confira o pedido e o eventual agendamento antes de confirmá-lo. Atualize as etapas conforme preparo, saída e entrega ocorrerem.
+3. Confira o pedido antes de confirmá-lo. Atualize as etapas conforme preparo, saída e entrega ocorrerem.
 4. Registre o pagamento somente depois de receber o valor. Esse registro entra no caixa e no relatório; não aciona banco ou operadora de cartão.
 5. Registre fiado e seus recebimentos na tela correspondente. Cada recebimento entra no caixa. O painel bloqueia o cancelamento de pedidos vinculados que já tenham recebimentos.
 6. Consulte clientes e fidelidade; crie campanhas apenas como rascunhos até haver integração oficial de envio.

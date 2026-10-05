@@ -16,13 +16,15 @@ Também há um [APK Sahara 2026.10.04](https://saharaesfihas-card.github.io/saha
 
 Ao abrir mapas ou continuar no WhatsApp, o APK apresenta o seletor do Android. O cliente escolhe o aplicativo, revisa a mensagem e a envia. A permissão de localização aparece somente após tocar em **Usar minha localização**, e o endereço manual continua disponível se ela for negada.
 
-O APK não hospeda o PDV nem ativa IA ou pagamentos online. O servidor de gestão e as integrações precisam ser configurados separadamente. Não havia assinatura anterior para comparar, portanto não é garantida a atualização sobre um APK antigo. A versão atual foi compilada e teve assinatura e manifesto verificados; GPS e WhatsApp ainda precisam de teste em aparelho Android.
+O servidor do PDV está no Render, e o site aberto pelo APK registra as solicitações na API `https://sahara-esfihas-pdv.onrender.com/api`. Essa conexão não exige reinstalar o APK. O [painel da loja](https://sahara-esfihas-pdv.onrender.com/admin.html) usa a senha configurada no Render. IA e pagamentos online continuam dependendo das integrações oficiais.
+
+Não havia assinatura anterior para comparar, portanto não é garantida a atualização sobre um APK antigo. A versão atual foi compilada e teve assinatura e manifesto verificados; GPS e WhatsApp ainda precisam de teste em aparelho Android.
 
 Consulte [`android/README.md`](android/README.md) para identificação do pacote, checksums, compilação e preservação privada da chave de assinatura.
 
 ## Pedido
 
-Escolha as quantidades, revise a sacola, preencha o endereço e selecione a forma de pagamento. **Continuar no WhatsApp** prepara uma mensagem; o cliente revisa e envia. A loja confirma disponibilidade, entrega e pagamento. Não há cobrança automática neste app.
+Escolha as quantidades, revise a sacola, preencha o endereço e selecione a forma de pagamento. **Continuar no WhatsApp** registra a solicitação no PDV e prepara uma mensagem; o cliente revisa e envia. A loja confirma disponibilidade, entrega e pagamento. Não há cobrança automática neste app. Se o registro falhar, a sacola e o endereço são preservados para tentar novamente.
 
 Para facilitar a entrega, toque em **Usar minha localização** quando estiver no endereço do pedido. Permita o acesso no navegador, confira o ponto no mapa e toque em **Usar este local**. Informe o número da casa e, se necessário, um complemento. A rua e o bairro tornam-se opcionais, e a mensagem do WhatsApp inclui um link do ponto confirmado e a precisão aproximada. A localização não preenche automaticamente o nome da rua nem o bairro.
 

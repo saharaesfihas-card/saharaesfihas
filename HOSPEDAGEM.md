@@ -1,16 +1,22 @@
 # Hospedar o PDV Sahara
 
-O projeto está preparado para hospedar o cardápio, o painel de gestão e a API juntos, com HTTPS e banco persistente. **Esta preparação não cria uma hospedagem:** é necessário aplicar a configuração na conta do responsável pela loja. O ambiente de trabalho do Codex não é um servidor permanente para a operação.
+O serviço `sahara-esfihas-pdv` foi implantado pelo responsável no Render. A saúde por HTTPS, o catálogo, o painel protegido e a autorização da origem do GitHub Pages foram conferidos. A conexão do cardápio usa `https://sahara-esfihas-pdv.onrender.com/api`.
+
+- [Abrir o painel do PDV](https://sahara-esfihas-pdv.onrender.com/admin.html).
+- [Abrir o cardápio no Render](https://sahara-esfihas-pdv.onrender.com/).
+- [Abrir o serviço no painel do Render](https://dashboard.render.com/web/srv-db1grsvavr4c73brou6g).
+
+Use a senha definida no campo seguro do Render para entrar no PDV. As instruções abaixo servem para manutenção, migração ou uma nova implantação; mantenha o serviço e o disco existentes para preservar os pedidos. O ambiente de trabalho do Codex é separado dessa hospedagem.
 
 ## Opção Hostinger VPS
 
 A preparação para um VPS com Docker Compose e Caddy está em [HOSTINGER.md](HOSTINGER.md). Ela inclui `compose.hostinger.yaml`, `Caddyfile.hostinger` e `.env.hostinger.example`, com HTTPS, aplicação interna e volumes persistentes. A ativação depende de acesso ao VPS e de um domínio ou subdomínio apontando ao servidor. Os recursos disponíveis em outro plano da Hostinger precisam ser confirmados no plano contratado.
 
-O Render permanece como alternativa abaixo. Nenhum dos caminhos cria hospedagem somente pela presença desses arquivos no repositório.
+O Render é a hospedagem atual. A opção Hostinger permanece preparada para uma eventual migração.
 
 ## Ativação pelo Render
 
-Use o botão abaixo depois que os arquivos de hospedagem estiverem publicados na branch `main` do repositório:
+Para uma nova implantação, use o botão abaixo depois que os arquivos de hospedagem estiverem publicados na branch `main`. O serviço atual já existe; não crie outro para atualizar o sistema.
 
 [Configurar a hospedagem no Render](https://render.com/deploy?repo=https://github.com/saharaesfihas-card/saharaesfihas)
 
@@ -33,14 +39,9 @@ A verificação de saúde indica que o processo responde; o login confirma que a
 
 ## Endereço atual do site e aplicativo
 
-O [site atual no GitHub Pages](https://saharaesfihas-card.github.io/saharaesfihas/) continua disponível. Ele usa o WhatsApp enquanto o seu `system-config.js` não tiver o endereço da API hospedada.
+O [site no GitHub Pages](https://saharaesfihas-card.github.io/saharaesfihas/) e o APK para clientes mantêm o mesmo endereço de cardápio. Seu `system-config.js` aponta para `https://sahara-esfihas-pdv.onrender.com/api`, e a origem do GitHub Pages está autorizada pelo servidor. A versão na URL desse script evita carregar uma configuração antiga do cache HTTP.
 
-Depois de confirmar o novo endereço HTTPS e o funcionamento do painel, há duas opções:
-
-- Usar o cardápio servido pelo novo endereço, que já se conecta à própria API.
-- Manter o endereço do GitHub Pages e atualizar seu `system-config.js` para `apiBase: 'https://ENDERECO-DO-SERVICO/api'`, substituindo o exemplo pelo endereço real. A origem do GitHub Pages já está permitida no `render.yaml`. Esse arquivo deve conter apenas o endereço público, sem senhas ou tokens.
-
-O painel administrativo deve ser aberto no domínio do servidor, em `/admin.html`. O aplicativo instalado no endereço antigo continua ligado àquele endereço; para usar o novo endereço, abra o novo cardápio e instale o aplicativo por ele.
+Não é necessário recompilar ou reinstalar o APK para conectar a API. O painel da loja deve ser aberto no domínio do Render, em `/admin.html`; o painel publicado no GitHub Pages não executa o servidor de gestão na própria origem. O cardápio servido na raiz do Render também usa a API relativa `/api`.
 
 ## Configuração entregue
 
