@@ -4,11 +4,18 @@
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 const baseURL = process.env.SAHARA_TEST_URL || 'http://127.0.0.1:8010';
+const localOrigin = new URL(baseURL).origin;
+
+async function isolateNetwork(context) {
+  await context.route('**/*', route => new URL(route.request().url()).origin === localOrigin
+    ? route.continue() : route.abort());
+}
 
 (async () => {
   const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true });
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await isolateNetwork(context);
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -31,14 +38,14 @@ const baseURL = process.env.SAHARA_TEST_URL || 'http://127.0.0.1:8010';
       }));
     });
     await page.reload();
-    assert.equal(await page.locator('#order-timing').inputValue(), 'scheduled');
-    assert.equal(await page.locator('#schedule-fields').isVisible(), true);
-    assert.equal(await page.locator('#schedule-time').inputValue(), '19:30');
+    assert.equal(await page.locator('#order-timing, #schedule-fields, #schedule-time').count(), 0);
+    assert.equal(await page.locator('#customer-name').inputValue(), 'Maria');
+    assert.equal(await page.locator('#customer-phone').inputValue(), '44999998888');
     assert.equal(await page.locator('#marketing-opt-in').isChecked(), true);
     assert.equal(await page.locator('input[value="Pix"]').isChecked(), true);
     assert.equal(await page.locator('#street').getAttribute('required'), null);
     assert.equal(await page.locator('#notes').inputValue(), 'Sem cebola');
-    console.log('PASS: atualização restaura agendamento, contato, consentimento, Pix e GPS confirmado');
+    console.log('PASS: atualização restaura contato, consentimento, Pix e GPS e ignora agendamento antigo');
 
     await page.goto(`${baseURL}/admin.html`);
     await page.goto(baseURL);
@@ -77,6 +84,7 @@ const baseURL = process.env.SAHARA_TEST_URL || 'http://127.0.0.1:8010';
     const nativeContext = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/133.0.0.0 Mobile Safari/537.36 SaharaAndroid/1',
     });
+    await isolateNetwork(nativeContext);
     const nativePage = await nativeContext.newPage();
     await nativePage.goto(baseURL);
     assert.equal(await nativePage.locator('#app-install').isVisible(), false);
