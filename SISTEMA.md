@@ -12,7 +12,7 @@ O [painel do PDV](https://sahara-esfihas-pdv.onrender.com/admin.html) e a API es
 | Endereço e localização | Endereço manual ou ponto de localização conferido e confirmado pelo cliente; o número da casa continua obrigatório. |
 | Ajuda no cardápio | Respostas locais sobre produtos, horário, entrega e como pedir. Não é um chatbot com IA nem atende conversas no WhatsApp. |
 | Pedidos, PDV e cozinha | Registro persistente de pedidos, histórico e etapas operadas pela loja. O PDV também registra pedidos recebidos por telefone ou WhatsApp. |
-| Estoque | Itens, entradas, saídas e indicação de reposição no painel. A API também permite cadastrar fichas técnicas; a confirmação do pedido consome o estoque configurado. Produtos sem vínculo de estoque não têm disponibilidade controlada. |
+| Estoque | Itens, entradas, saídas e indicação de reposição no painel. A API também permite cadastrar fichas técnicas; a entrada do pedido em preparo consome o estoque configurado. Produtos sem vínculo de estoque não têm disponibilidade controlada. |
 | Caixa e fiado | Abertura, fechamento, movimentações, registro manual de pagamento e recebimentos de fiado. Registrar um recebimento não realiza uma cobrança online. |
 | Clientes e RFV | Cadastro, histórico e segmentação por recência, frequência e valor de pedidos entregues e pagos. |
 | Cupons | Cadastro de descontos com validade e limites; aplicação no PDV e na API de pedidos. O checkout público ainda não tem um campo de cupom. |
@@ -86,17 +86,25 @@ Abra `http://127.0.0.1:8010/` para o cardápio e `http://127.0.0.1:8010/admin.ht
 
 Em produção, mantenha `SAHARA_COOKIE_SECURE=1`, configure HTTPS e execute o servidor por um gerenciador de processos ou pelo container entregue. Se houver proxy reverso, preserve o `Host` público, encaminhe o protocolo HTTPS corretamente e confie em cabeçalhos de proxy somente do proxy autorizado. O painel deve permanecer no mesmo domínio da API; as alterações exigem sessão e token de proteção contra requisições indevidas. Um protocolo HTTP informado incorretamente pelo proxy pode causar erro de origem ao entrar no painel.
 
+## Layout do painel
+
+O painel tem navegação lateral por operação, gestão, relacionamento e configurações. No celular, o botão de menu abre as mesmas áreas em uma gaveta. Os cartões de pedidos mostram um identificador curto para facilitar a leitura; as alterações e comandas continuam usando o identificador completo.
+
+Cada pedido exibe quatro etapas numeradas: preparo na cozinha, pedido pronto, a caminho do endereço e entregue. A tela de pedidos traz os totais reais por etapa, busca por cliente, telefone ou pedido e filtro de situação. O PDV permite buscar produtos, filtrar categorias e ajustar quantidades sem perder os dados preenchidos. O resumo acompanha os produtos selecionados e seu subtotal; cupons são conferidos pelo servidor ao registrar o pedido. Dados do cliente, endereço e pagamento ficam em seções que podem ser recolhidas.
+
+As mudanças do painel precisam de uma nova implantação no serviço Render existente. Com a implantação automática desligada, use **Manual Deploy → Deploy latest commit**; o GitHub Pages publica o cardápio separadamente.
+
 ## Uso diário
 
 1. Entre em `admin.html` e abra o caixa.
-2. Cadastre o estoque que deseja controlar e registre entradas antes de confirmar pedidos. Insumos sem ficha técnica não são consumidos automaticamente.
-3. Confira o pedido antes de confirmá-lo. Atualize as etapas conforme preparo, saída e entrega ocorrerem.
+2. Cadastre o estoque que deseja controlar e registre entradas antes de receber pedidos. Insumos sem ficha técnica não são consumidos automaticamente.
+3. Novos pedidos do cardápio e do PDV entram em **Em preparo na cozinha**. Confira o pedido e avance para **Pedido pronto**, **A caminho do endereço** e **Entregue**, conforme cada etapa ocorrer. O sistema exige o pedido pronto antes da saída para entrega.
 4. Registre o pagamento somente depois de receber o valor. Esse registro entra no caixa e no relatório; não aciona banco ou operadora de cartão.
 5. Registre fiado e seus recebimentos na tela correspondente. Cada recebimento entra no caixa. O painel bloqueia o cancelamento de pedidos vinculados que já tenham recebimentos.
 6. Consulte clientes e fidelidade; crie campanhas apenas como rascunhos até haver integração oficial de envio.
 7. Confira as movimentações e feche o caixa com o valor efetivamente contado.
 
-Cancelar um pedido confirmado, antes do preparo, devolve o estoque consumido. Depois do início do preparo, o estoque não retorna automaticamente. O painel bloqueia o cancelamento de pedidos pagos ou com recebimento parcial: a rotina de cancelamento com estorno ainda não está disponível. Um ajuste manual no caixa não desbloqueia esse cancelamento e não realiza estorno em provedores externos.
+Novos pedidos consomem o estoque vinculado e registram o uso do cupom na mesma transação de entrada em preparo. Uma repetição do registro ou da etapa não duplica esses movimentos. Se faltar estoque, o pedido não é registrado. O cancelamento depois do início do preparo não devolve automaticamente os insumos. Pedidos antigos ainda em confirmação preservam a devolução de estoque ao cancelar antes do preparo. O painel bloqueia o cancelamento de pedidos pagos ou com recebimento parcial: a rotina de cancelamento com estorno ainda não está disponível. Um ajuste manual no caixa não desbloqueia esse cancelamento e não realiza estorno em provedores externos.
 
 ## Dados e manutenção
 

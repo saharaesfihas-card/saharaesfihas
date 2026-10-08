@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from server.core import COOKIE, hash_password
+from server.core import COOKIE, SCHEMA, hash_password
 from server.main import create_app
 
 
@@ -159,7 +159,7 @@ class CoreTests(unittest.TestCase):
         created = self.order(self.body(items=[{"id": "carne", "quantity": 2},
                                              {"id": "calabresa-acebolada", "quantity": 1}]))
         self.assertEqual(created["total_cents"], 1250)
-        self.assertEqual(created["status"], "new")
+        self.assertEqual(created["status"], "preparing")
         stored = self.stored(created["id"])
         self.assertEqual(stored["payment_status"], "unpaid")
         self.assertEqual(stored["customer_phone"], "44999999999")
@@ -196,7 +196,7 @@ class CoreTests(unittest.TestCase):
         response = self.client.get("/api/orders/" + created["id"] + "/track", params={"token": created["tracking_token"]})
         self.assertEqual(response.status_code, 200)
         public = response.json()
-        self.assertEqual(public["status"], "new")
+        self.assertEqual(public["status"], "preparing")
         self.assertEqual(public["total_cents"], 800)
         for field in ("delivery", "customer", "customer_name", "customer_phone", "customer_id", "notes", "tracking_token"):
             self.assertNotIn(field, public)
@@ -219,9 +219,9 @@ class CoreTests(unittest.TestCase):
         changed = deepcopy(body)
         changed["items"][0]["quantity"] = 3
         self.assertEqual(self.client.post("/api/orders", json=changed).status_code, 409)
-        self.transition(first["id"], "confirmed")
+        self.transition(first["id"], "ready")
         replay = self.order(body)
-        self.assertEqual(replay["status"], "confirmed")
+        self.assertEqual(replay["status"], "ready")
         with self.connection() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM analytics_events WHERE name='order_registered'").fetchone()[0], 1)
@@ -246,35 +246,90 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(replay["id"], first["id"])
         self.assertTrue(replay["replayed"])
 
-    def test_stock_confirmation_is_atomic_with_coupon_and_cancellation(self):
-        stock_result = self.post("/inventory", {"label": "Carne pronta", "product_id": "carne", "on_hand": 4})
-        inventory_id = stock_result["items"][0]["id"]
+    def test_preparation_consumes_stock_and_coupon_once_with_atomic_registration(self):
+        inventory_id = self.post("/inventory", {"label": "Carne pronta", "product_id": "carne", "on_hand": 4})["items"][0]["id"]
         coupon = self.post("/coupons", {"code": "LIMITE", "kind": "percent", "value": 10, "usage_limit": 1}, 201)["coupon"]
-        first = self.order(self.body(coupon_code="LIMITE"))
-        second = self.order(self.body(coupon_code="LIMITE"))
-        self.transition(first["id"], "confirmed")
+        body = self.body(coupon_code="LIMITE")
+        first = self.order(body)
         self.assertEqual(self.stock(inventory_id), 2)
-        self.transition(first["id"], "confirmed")
+        self.order(body)
+        self.transition(first["id"], "preparing")
         self.assertEqual(self.stock(inventory_id), 2)
-        self.transition(second["id"], "confirmed", 409)
+        denied = self.client.post("/api/orders", json=self.body(coupon_code="LIMITE"))
+        self.assertEqual(denied.status_code, 400)
         self.assertEqual(self.stock(inventory_id), 2)
-        stored = self.stored(second["id"])
-        self.assertEqual((stored["status"], stored["stock_applied"], stored["coupon_applied"]), ("new", 0, 0))
+        stored = self.stored(first["id"])
+        self.assertEqual((stored["status"], stored["stock_applied"], stored["coupon_applied"]), ("preparing", 1, 1))
         with self.connection() as conn:
             self.assertEqual(conn.execute("SELECT uses FROM coupons WHERE id=?", (coupon["id"],)).fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM inventory_movements WHERE order_id=?", (first["id"],)).fetchone()[0], 1)
         self.transition(first["id"], "cancelled")
         self.transition(first["id"], "cancelled")
-        self.assertEqual(self.stock(inventory_id), 4)
+        self.assertEqual(self.stock(inventory_id), 2)  # Production has already started.
 
-    def test_stock_shortage_and_state_transitions(self):
-        self.post("/inventory", {"label": "Carne pronta", "product_id": "carne", "on_hand": 1})
-        order = self.order()
-        self.transition(order["id"], "delivered", 409)
-        self.transition(order["id"], "confirmed", 409)
-        self.assertEqual(self.stored(order["id"])["status"], "new")
-        self.transition(order["id"], "cancelled")
-        self.transition(order["id"], "confirmed", 409)
-        self.post("/orders/" + order["id"] + "/payment", {"status": "paid"}, 409)
+    def test_stock_shortage_rejects_registration_and_rolls_back_customer_and_coupon(self):
+        inventory_id = self.post("/inventory", {"label": "Carne pronta", "product_id": "carne", "on_hand": 1})["items"][0]["id"]
+        coupon = self.post("/coupons", {"code": "ESTOQUE", "kind": "percent", "value": 10}, 201)["coupon"]
+        denied = self.client.post("/api/orders", json=self.body(coupon_code="ESTOQUE"))
+        self.assertEqual(denied.status_code, 409)
+        self.assertEqual(self.stock(inventory_id), 1)
+        with self.connection() as conn:
+            for table in ("orders", "customers", "order_events"):
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM " + table).fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT uses FROM coupons WHERE id=?", (coupon["id"],)).fetchone()[0], 0)
+
+    def test_existing_database_with_old_default_still_registers_in_preparation(self):
+        directory = Path(self.directory.name) / "legacy"
+        directory.mkdir()
+        with sqlite3.connect(directory / "sahara.sqlite3") as conn:
+            conn.executescript(SCHEMA.replace("DEFAULT 'preparing'", "DEFAULT 'new'"))
+        app = create_app(data_dir=directory, admin_password_hash=self.password_hash, secure_cookie=False)
+        with TestClient(app) as client:
+            response = client.post("/api/orders", json=self.body())
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()["status"], "preparing")
+        with sqlite3.connect(directory / "sahara.sqlite3") as conn:
+            self.assertEqual(conn.execute("SELECT status FROM orders").fetchone()[0], "preparing")
+
+    def test_four_stages_require_ready_before_delivery_and_preserve_event_history(self):
+        for endpoint in ("/api/orders", "/api/admin/orders"):
+            response = self.client.post(endpoint, json=self.body(), headers=self.headers)
+            self.assertEqual(response.status_code, 201, response.text)
+            order = response.json()
+            self.assertEqual(order["status"], "preparing")
+            self.transition(order["id"], "out_for_delivery", 409)
+            self.transition(order["id"], "delivered", 409)
+            for status in ("ready", "out_for_delivery", "delivered"):
+                self.transition(order["id"], status)
+                self.transition(order["id"], status)  # Retrying does not duplicate a stage.
+                tracking = self.client.get("/api/orders/" + order["id"] + "/track", params={"token": order["tracking_token"]})
+                self.assertEqual(tracking.json()["status"], status)
+            self.transition(order["id"], "ready", 409)
+            with self.connection() as conn:
+                events = conn.execute("SELECT status FROM order_events WHERE order_id=? ORDER BY rowid", (order["id"],)).fetchall()
+                self.assertEqual([event["status"] for event in events], ["preparing", "ready", "out_for_delivery", "delivered"])
+
+    def test_legacy_received_orders_can_start_preparation_or_confirm_and_restore_stock(self):
+        old = self.order()
+        with self.connection() as conn:
+            conn.execute("UPDATE orders SET status='new',stock_applied=0,confirmed_at=NULL WHERE id=?", (old["id"],))
+        inventory_id = self.post("/inventory", {"label": "Carne pronta", "product_id": "carne", "on_hand": 4})["items"][0]["id"]
+        self.transition(old["id"], "confirmed")
+        self.assertEqual(self.stock(inventory_id), 2)
+        self.transition(old["id"], "confirmed")
+        self.assertEqual(self.stock(inventory_id), 2)
+        self.transition(old["id"], "cancelled")
+        self.transition(old["id"], "cancelled")
+        self.assertEqual(self.stock(inventory_id), 4)
+        self.transition(old["id"], "preparing", 409)
+        self.post("/orders/" + old["id"] + "/payment", {"status": "paid"}, 409)
+        second = self.order(self.body(items=[{"id": "queijo", "quantity": 1}]))
+        with self.connection() as conn:
+            conn.execute("UPDATE orders SET status='new',stock_applied=0,confirmed_at=NULL WHERE id=?", (second["id"],))
+        self.transition(second["id"], "ready", 409)
+        self.transition(second["id"], "preparing")
+        self.transition(second["id"], "ready")
 
     def test_payment_cash_and_paid_delivery_loyalty_are_idempotent(self):
         order = self.order()
@@ -285,7 +340,7 @@ class CoreTests(unittest.TestCase):
         with self.connection() as conn:
             customer = conn.execute("SELECT * FROM customers").fetchone()
             self.assertEqual(customer["points"], 0)
-        for status in ("confirmed", "preparing", "out_for_delivery", "delivered", "delivered"):
+        for status in ("preparing", "ready", "out_for_delivery", "delivered", "delivered"):
             self.transition(identifier, status)
         self.post("/orders/" + identifier + "/payment", {"status": "paid"})
         self.transition(identifier, "preparing", 409)
@@ -326,7 +381,7 @@ class CoreTests(unittest.TestCase):
         self.post("/orders/" + identifier + "/payment", {"status": "paid"}, 409)
         self.assertEqual(self.stored(identifier)["payment_status"], "unpaid")
         self.transition(identifier, "cancelled", 409)
-        for status in ("confirmed", "preparing", "out_for_delivery", "delivered"):
+        for status in ("preparing", "ready", "out_for_delivery", "delivered"):
             self.transition(identifier, status)
         with self.connection() as conn:
             self.assertEqual(conn.execute("SELECT points FROM customers").fetchone()[0], 0)

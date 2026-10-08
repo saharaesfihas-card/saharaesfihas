@@ -74,7 +74,7 @@ class OrderInput(Model):
     idempotency_key: str = Field(min_length=16, max_length=128)
 
 class StatusInput(Model):
-    status: Literal['confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled']
+    status: Literal['confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']
 
 class PaymentInput(Model):
     status: Literal['paid']
@@ -87,9 +87,10 @@ class EventInput(Model):
     name: Literal['view', 'checkout_started']
 
 TRANSITIONS = {
-    'new': {'confirmed', 'cancelled'},
+    'new': {'confirmed', 'preparing', 'cancelled'},
     'confirmed': {'preparing', 'cancelled'},
-    'preparing': {'out_for_delivery', 'cancelled'},
+    'preparing': {'ready', 'cancelled'},
+    'ready': {'out_for_delivery', 'cancelled'},
     'out_for_delivery': {'delivered', 'cancelled'},
     'delivered': set(), 'cancelled': set()
 }
@@ -258,13 +259,17 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             order_id, tracking = uuid.uuid4().hex, secrets.token_urlsafe(24)
             conn.execute('''INSERT INTO orders(id,created_at,requested_for,customer_id,customer_name,customer_phone,
                 delivery_json,items_json,subtotal_cents,discount_cents,total_cents,coupon_code,payment_method,
-                tracking_token,idempotency_key,request_hash,source,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                tracking_token,idempotency_key,request_hash,source,notes,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (order_id, utcnow(), requested_for, customer_id, body.customer.name, body.customer.phone,
                  json.dumps(delivery, ensure_ascii=False), json.dumps(items, ensure_ascii=False), subtotal, discount,
-                 subtotal - discount, code, body.payment_method, tracking, body.idempotency_key, fingerprint, source, body.notes))
+                 subtotal - discount, code, body.payment_method, tracking, body.idempotency_key, fingerprint, source, body.notes, 'preparing'))
+            order = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
+            operations.apply_stock(conn, order)
+            marketing.record_coupon_use(conn, order)
+            conn.execute('UPDATE orders SET stock_applied=1,confirmed_at=? WHERE id=?', (utcnow(), order_id))
             conn.execute('INSERT INTO analytics_events VALUES(?,?)', ('order_registered', utcnow()))
-            conn.execute('INSERT INTO order_events VALUES(?,?,?,?)', (uuid.uuid4().hex, order_id, 'new', utcnow()))
-            return {'id': order_id, 'status': 'new', 'total_cents': subtotal - discount, 'tracking_token': tracking,
+            conn.execute('INSERT INTO order_events VALUES(?,?,?,?)', (uuid.uuid4().hex, order_id, 'preparing', utcnow()))
+            return {'id': order_id, 'status': 'preparing', 'total_cents': subtotal - discount, 'tracking_token': tracking,
                     'tracking_url': None, 'replayed': False}
 
     @app.post('/api/orders', status_code=201)
@@ -302,7 +307,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
                 raise HTTPException(409, 'Essa mudança de etapa não é permitida.')
             if body.status == 'cancelled' and (order['payment_status'] == 'paid' or operations.has_receivable_payments(conn, order_id)):
                 raise HTTPException(409, 'O pedido tem recebimento. O cancelamento com estorno ainda não está disponível no sistema.')
-            if body.status == 'confirmed':
+            if body.status in ('confirmed', 'preparing', 'ready') and not order['stock_applied']:
                 operations.apply_stock(conn, order)
                 marketing.record_coupon_use(conn, order)
                 conn.execute('UPDATE orders SET stock_applied=1,confirmed_at=? WHERE id=?', (utcnow(), order_id))

@@ -2,9 +2,11 @@
 
 (() => {
   const $ = id => document.getElementById(id);
-  const state = { csrf: null, view: 'orders', catalog: [], customers: [], drivers: [], orderFilter: 'active', generation: 0, fieldIds: new Map() };
-  const statuses = { new: 'Novo', confirmed: 'Confirmado', preparing: 'Em preparo', out_for_delivery: 'Saiu para entrega', delivered: 'Entregue', cancelled: 'Cancelado' };
-  const transitions = { new: ['confirmed', 'cancelled'], confirmed: ['preparing', 'cancelled'], preparing: ['out_for_delivery', 'cancelled'], out_for_delivery: ['delivered', 'cancelled'], delivered: [], cancelled: [] };
+  const state = { csrf: null, view: 'orders', catalog: [], customers: [], drivers: [], orderFilter: 'active', orderQuery: '', generation: 0, fieldIds: new Map() };
+  const stages = [['preparing', 'Em preparo na cozinha'], ['ready', 'Pedido pronto'], ['out_for_delivery', 'A caminho do endereço'], ['delivered', 'Entregue']];
+  const statuses = { ...Object.fromEntries(stages), new: 'Em preparo na cozinha', confirmed: 'Em preparo na cozinha', cancelled: 'Cancelado' };
+  const stageKey = status => ['new', 'confirmed'].includes(status) ? 'preparing' : status;
+  const transitions = { new: ['preparing', 'cancelled'], confirmed: ['preparing', 'cancelled'], preparing: ['ready', 'cancelled'], ready: ['out_for_delivery', 'cancelled'], out_for_delivery: ['delivered', 'cancelled'], delivered: [], cancelled: [] };
   const views = {
     orders: ['Pedidos e cozinha', 'Acompanhe os pedidos de delivery, prepare as comandas e organize a entrega.'],
     pos: ['Novo pedido · PDV', 'Registre um pedido recebido por telefone ou WhatsApp usando os preços do cardápio.'],
@@ -20,6 +22,13 @@
     reviews: ['Avaliações', 'Acompanhe os comentários e as notas recebidas dos clientes.'],
     integrations: ['Integrações', 'Confira quais serviços estão disponíveis e o que falta para ativá-los.']
   };
+  const navGroups = [
+    ['Operação', [['orders', 'Pedidos e cozinha', 'receipt'], ['pos', 'Novo pedido · PDV', 'cart3'], ['drivers', 'Entregadores', 'scooter']]],
+    ['Gestão', [['dashboard', 'Resultados', 'bar-chart-line'], ['inventory', 'Estoque', 'boxes'], ['cash', 'Caixa', 'cash-stack'], ['receivables', 'Fiado', 'wallet2']]],
+    ['Relacionamento', [['customers', 'Clientes e RFV', 'people'], ['coupons', 'Cupons', 'ticket-perforated'], ['loyalty', 'Fidelidade', 'star'], ['campaigns', 'Campanhas', 'megaphone'], ['reviews', 'Avaliações', 'chat-square-text']]],
+    ['Configurações', [['integrations', 'Integrações', 'plug']]]
+  ];
+  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const money = cents => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((Number(cents) || 0) / 100);
   const date = value => value && !Number.isNaN(new Date(value).getTime()) ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value)) : '—';
   const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -31,6 +40,29 @@
     if (text !== undefined && text !== null) node.textContent = String(text);
     if (className) node.className = className;
     return node;
+  }
+
+  function icon(name, className = '') {
+    const node = el('img', undefined, className);
+    node.src = `icons/admin/${name}.svg`; node.alt = ''; node.width = 20; node.height = 20;
+    return node;
+  }
+
+  function emptyState(title, description) {
+    const node = el('div', undefined, 'empty-state');
+    node.append(icon('receipt', 'empty-icon'), el('h2', title, 'empty-title'), el('p', description));
+    return node;
+  }
+
+  function orderProgress(status) {
+    const progress = el('ol', undefined, 'order-progress'); progress.setAttribute('aria-label', 'Etapas do pedido');
+    const current = stages.findIndex(([key]) => key === stageKey(status));
+    stages.forEach(([key, label], index) => {
+      const step = el('li', undefined, `order-stage${index < current || status === 'delivered' ? ' completed' : ''}`);
+      if (index === current) step.setAttribute('aria-current', 'step');
+      step.append(el('span', index + 1, 'stage-number'), el('span', label, 'stage-label')); progress.append(step);
+    });
+    return progress;
   }
 
   function showNotice(message, error = false) {
@@ -64,6 +96,39 @@
     $('login-panel').hidden = mode !== 'login';
     $('workspace').hidden = mode !== 'workspace';
     $('logout').hidden = mode !== 'workspace';
+    $('topbar-location').hidden = mode !== 'workspace';
+    $('account-badge').hidden = mode !== 'workspace';
+    document.body.classList.toggle('authenticated', mode === 'workspace');
+    closeMenu(false);
+  }
+
+  const mobileMenu = window.matchMedia('(max-width: 800px)');
+
+  function closeMenu(restoreFocus = true) {
+    const wasOpen = document.body.classList.contains('sidebar-open');
+    document.body.classList.remove('sidebar-open');
+    $('menu-toggle').setAttribute('aria-expanded', 'false');
+    $('sidebar-overlay').hidden = true;
+    $('sidebar').inert = mobileMenu.matches;
+    $('content').inert = false;
+    document.querySelector('.topbar').inert = false;
+    if (wasOpen && restoreFocus) $('menu-toggle').focus({ preventScroll: true });
+  }
+
+  function openMenu() {
+    document.body.classList.add('sidebar-open');
+    $('menu-toggle').setAttribute('aria-expanded', 'true');
+    $('sidebar-overlay').hidden = false;
+    $('sidebar').inert = false;
+    $('content').inert = true;
+    document.querySelector('.topbar').inert = true;
+    $('menu-close').focus({ preventScroll: true });
+  }
+
+  function navigate(view) {
+    state.view = view; showNotice(''); closeMenu(false); renderView();
+    $('content').focus({ preventScroll: true });
+    window.scrollTo({ top: 0, behavior: 'instant' });
   }
 
   async function connect() {
@@ -187,6 +252,10 @@
     actions.append(control);
     if (help) actions.append(el('p', help));
     form.append(grid, actions);
+    form.addEventListener('invalid', event => {
+      const section = event.target.closest('details');
+      if (section) section.open = true;
+    }, true);
     form.addEventListener('submit', event => {
       event.preventDefault();
       if (!form.reportValidity()) return;
@@ -214,33 +283,56 @@
     const [ordersData, driverData] = await Promise.all([api('/admin/orders'), api('/admin/drivers')]);
     state.drivers = list(driverData, 'drivers');
     const all = list(ordersData, 'orders');
-    const filter = el('div', undefined, 'order-filter');
-    const select = selection('Filtrar pedidos por situação', [['active', 'Em andamento'], ['all', 'Todos os pedidos'], ...Object.entries(statuses)], () => { state.orderFilter = select.value; renderView(); });
+    const overview = el('div', undefined, 'order-overview');
+    for (const [label, count, name, tone] of [
+      ['Em preparo na cozinha', all.filter(order => stageKey(order.status) === 'preparing').length, 'clock', 'amber'],
+      ['Pedido pronto', all.filter(order => order.status === 'ready').length, 'bag-check', 'rose'],
+      ['A caminho do endereço', all.filter(order => order.status === 'out_for_delivery').length, 'scooter', 'blue'],
+      ['Entregues', all.filter(order => order.status === 'delivered').length, 'bag-check', 'green']
+    ]) {
+      const card = el('div', undefined, `overview-card ${tone}`);
+      const text = el('div'); text.append(el('p', label), el('strong', count, 'overview-value'));
+      card.append(text, icon(name, 'overview-icon')); overview.append(card);
+    }
+    screen.append(overview);
+    const toolbar = el('div', undefined, 'order-toolbar');
+    const searchWrap = el('div', undefined, 'search-field');
+    const search = el('input'); search.type = 'search'; search.placeholder = 'Buscar cliente, telefone ou pedido'; search.value = state.orderQuery;
+    search.setAttribute('aria-label', 'Buscar pedidos'); searchWrap.append(icon('search'), search);
+    const select = selection('Filtrar pedidos por situação', [['active', 'Em andamento'], ['all', 'Todos os pedidos'], ...stages, ['cancelled', 'Cancelado']], () => { state.orderFilter = select.value; renderView(); });
     select.value = state.orderFilter;
-    filter.append(el('span', `${all.length} pedido${all.length === 1 ? '' : 's'} registrado${all.length === 1 ? '' : 's'}`), select);
-    screen.append(filter);
-    const orders = all.filter(order => state.orderFilter === 'all' || (state.orderFilter === 'active' ? !['delivered', 'cancelled'].includes(order.status) : order.status === state.orderFilter));
+    toolbar.append(searchWrap, select); screen.append(toolbar);
+    const count = el('p', undefined, 'order-count'); count.setAttribute('role', 'status'); screen.append(count);
+    const orders = all.filter(order => state.orderFilter === 'all' || (state.orderFilter === 'active' ? !['delivered', 'cancelled'].includes(order.status) : stageKey(order.status) === state.orderFilter));
     orders.sort((a, b) => new Date(a.requested_for || a.created_at) - new Date(b.requested_for || b.created_at));
-    if (!orders.length) { screen.append(el('p', 'Nenhum pedido nesta situação. Pedidos registrados no servidor aparecerão aqui.', 'empty')); return; }
     const cards = el('div', undefined, 'cards');
+    const searchable = [];
     for (const order of orders) {
-      const card = el('article', undefined, 'order-card');
+      const card = el('article', undefined, 'order-card'); card.dataset.status = stageKey(order.status);
       const top = el('div', undefined, 'order-top');
-      top.append(el('h2', `Pedido #${order.id}`), badge(statuses[order.status] || order.status)); card.append(top);
-      card.append(el('p', `${order.customer_name || 'Cliente'}${order.customer_phone ? ` · ${order.customer_phone}` : ''}`));
+      const heading = el('h2', `Pedido #${order.id.slice(0, 8).toUpperCase()}`, 'order-id'); heading.title = `Pedido #${order.id}`; heading.setAttribute('aria-label', `Pedido ${order.id}`);
+      top.append(heading, badge(statuses[order.status] || order.status, `status-${stageKey(order.status)}`)); card.append(top);
+      if (order.status !== 'cancelled') card.append(orderProgress(order.status));
+      const customer = el('div', undefined, 'order-customer');
+      const customerText = el('div'); customerText.append(el('p', order.customer_name || 'Cliente', 'customer-name'));
+      if (order.customer_phone) customerText.append(el('p', order.customer_phone, 'order-meta'));
+      customer.append(icon('person'), customerText); card.append(customer);
       card.append(el('p', `Recebido: ${date(order.created_at)}`, 'order-meta'));
       if (order.requested_for) card.append(el('p', `Agendado: ${date(order.requested_for)}`, 'badge warning'));
-      const items = el('ul');
-      for (const item of order.items || []) items.append(el('li', `${item.quantity} × ${item.name} · ${money(item.price_cents * item.quantity)}`));
+      const items = el('ul', undefined, 'order-items');
+      for (const item of order.items || []) {
+        const line = el('li', undefined, 'order-line');
+        line.append(el('span', `${item.quantity}×`, 'order-quantity'), el('span', item.name), el('strong', money(item.price_cents * item.quantity), 'item-total')); items.append(line);
+      }
       card.append(items);
       const address = order.delivery || {};
-      card.append(el('p', [address.street, address.number, address.neighborhood, address.complement].filter(Boolean).join(', ') || 'Endereço não informado', 'order-address'));
+      const addressLine = el('p', undefined, 'order-address'); addressLine.append(icon('geo-alt'), el('span', [address.street, address.number, address.neighborhood, address.complement].filter(Boolean).join(', ') || 'Endereço não informado')); card.append(addressLine);
       if (address.location && Number.isFinite(Number(address.location.latitude)) && Number.isFinite(Number(address.location.longitude))) {
         const link = el('a', 'Abrir ponto de entrega ↗'); link.href = `https://www.google.com/maps?q=${encodeURIComponent(address.location.latitude)},${encodeURIComponent(address.location.longitude)}`; link.target = '_blank'; link.rel = 'noopener noreferrer'; card.append(link);
       }
-      if (order.notes) card.append(el('p', `Observação: ${order.notes}`));
+      if (order.notes) card.append(el('p', `Observação: ${order.notes}`, 'order-notes'));
       if (order.discount_cents) card.append(el('p', `Desconto: ${money(order.discount_cents)}`, 'order-meta'));
-      const total = el('p', undefined, 'order-total'); total.append(el('span', 'Total'), el('strong', money(order.total_cents))); card.append(total);
+      const total = el('p', undefined, 'order-total'); total.append(el('span', 'Total do pedido'), el('strong', money(order.total_cents))); card.append(total);
       card.append(el('p', `${order.payment_method || 'Pagamento'} · ${order.payment_status === 'paid' ? 'Pago' : 'A receber'}`, 'order-meta'));
       const actions = el('div', undefined, 'order-actions');
       const nextStatuses = transitions[order.status] || [];
@@ -249,7 +341,7 @@
         actions.append(statusSelect, button('Atualizar situação', async () => {
           if (statusSelect.value === 'cancelled' && !window.confirm(`Cancelar o pedido #${order.id}?`)) return;
           await saved(`/admin/orders/${encodeURIComponent(order.id)}`, { status: statusSelect.value }, 'Situação do pedido atualizada.', 'PATCH');
-        }));
+        }, 'small-button status-action'));
       }
       if (order.payment_status !== 'paid' && order.status !== 'cancelled') actions.append(button('Registrar pagamento', async () => {
         if (!window.confirm(`Confirmar que o pagamento de ${money(order.total_cents)} do pedido #${order.id} foi recebido?`)) return;
@@ -262,8 +354,19 @@
         await saved(`/admin/orders/${encodeURIComponent(order.id)}/driver`, { driver_id: drivers.value || null }, drivers.value ? 'Entregador atribuído.' : 'Entregador removido.', 'PATCH');
       }));
       card.append(actions); cards.append(card);
+      searchable.push([card, normalize([order.id, order.customer_name, order.customer_phone].join(' '))]);
     }
-    screen.append(cards);
+    const empty = emptyState('Nenhum pedido por aqui', 'Os pedidos recebidos pelo cardápio ou registrados no PDV aparecerão nesta área.');
+    screen.append(cards, empty);
+    function filterOrders() {
+      const query = normalize(state.orderQuery).trim(); let visible = 0;
+      for (const [card, text] of searchable) { card.hidden = !text.includes(query); if (!card.hidden) visible++; }
+      cards.hidden = visible === 0; empty.hidden = visible > 0;
+      empty.querySelector('h2').textContent = query ? 'Nenhum pedido encontrado' : 'Nenhum pedido nesta situação';
+      empty.querySelector('p').textContent = query ? 'Tente outro nome, telefone ou número do pedido.' : 'Os pedidos recebidos pelo cardápio ou registrados no PDV aparecerão nesta área.';
+      count.textContent = `${visible} pedido${visible === 1 ? '' : 's'} nesta visualização · ${all.length} no histórico`;
+    }
+    search.addEventListener('input', () => { state.orderQuery = search.value; filterOrders(); }); filterOrders();
   }
 
   function printOrder(order) {
@@ -283,8 +386,7 @@
 
   async function loadPos(screen) {
     const data = await api('/catalog'); state.catalog = list(data, 'products');
-    if (!state.catalog.length) { screen.append(el('p', 'O cardápio não tem produtos disponíveis. Verifique o cadastro antes de registrar pedidos.', 'empty')); return; }
-    const p = panel('Registrar pedido de delivery');
+    if (!state.catalog.length) { screen.append(emptyState('Cardápio indisponível', 'Verifique o cadastro de produtos antes de registrar pedidos.')); return; }
     const quantityInputs = [];
     let idempotencyKey = crypto.randomUUID(); let orderFingerprint = '';
     const { form, grid } = createForm('Registrar pedido', async data => {
@@ -297,28 +399,82 @@
       await api('/admin/orders', { method: 'POST', body: { ...payload, idempotency_key: idempotencyKey } });
       idempotencyKey = crypto.randomUUID();
       showNotice('Pedido registrado. Acompanhe a preparação em Pedidos e cozinha.');
-      state.view = 'orders'; state.orderFilter = 'active'; await renderView();
-    }, 'Registre o pagamento recebido separadamente na tela de pedidos.');
-    field(grid, 'name', 'Nome do cliente', { required: true, maxLength: 100 });
-    field(grid, 'phone', 'Telefone do cliente', { type: 'tel', required: true, maxLength: 25 });
-    field(grid, 'street', 'Rua', { required: true, maxLength: 160 });
-    field(grid, 'number', 'Número', { required: true, maxLength: 20 });
-    field(grid, 'neighborhood', 'Bairro', { required: true, maxLength: 100 });
-    field(grid, 'complement', 'Complemento', { maxLength: 160 });
-    field(grid, 'payment_method', 'Forma de pagamento', { type: 'select', choices: [['Pix', 'Pix combinado com a loja'], ['Dinheiro', 'Dinheiro na entrega'], ['Cartão de crédito', 'Cartão de crédito na entrega'], ['Cartão de débito', 'Cartão de débito na entrega']] });
-    field(grid, 'coupon_code', 'Cupom (opcional)', { maxLength: 40 });
-    field(grid, 'notes', 'Observações', { type: 'textarea', wide: true, maxLength: 500 });
-    const products = el('div', undefined, 'field wide'); products.append(el('h3', 'Produtos'));
-    const total = el('div', undefined, 'product-summary'); const totalValue = el('strong', money(0)); total.append(el('span', 'Subtotal dos produtos'), totalValue);
-    for (const product of state.catalog) {
-      const row = el('div', undefined, 'product-entry'); const input = el('input');
-      input.type = 'number'; input.min = '0'; input.max = '99'; input.step = '1'; input.value = '0'; input.id = `product-${quantityInputs.length}`;
-      const labelNode = el('label', product.name); labelNode.htmlFor = input.id; labelNode.append(el('small', `${product.category} · ${money(product.price_cents)}`));
-      quantityInputs.push([product, input]);
-      input.addEventListener('input', () => { totalValue.textContent = money(quantityInputs.reduce((sum, [item, control]) => sum + Math.max(0, numeric(control.value)) * item.price_cents, 0)); });
-      row.append(labelNode, input); products.append(row);
+      state.view = 'orders'; state.orderFilter = 'active'; state.orderQuery = ''; await renderView();
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }, 'O pagamento recebido é registrado na tela de pedidos.');
+    grid.className = 'pos-layout';
+    const products = panel('Produtos do cardápio', 'Escolha os produtos e a quantidade para montar o pedido.'); products.classList.add('pos-products');
+    const customer = el('section', undefined, 'panel pos-customer');
+    customer.append(el('h2', 'Resumo do pedido'));
+    const selected = el('div', undefined, 'selected-items');
+    const total = el('div', undefined, 'product-summary'); const totalValue = el('strong', money(0)); totalValue.setAttribute('aria-live', 'polite'); total.append(el('span', 'Subtotal dos produtos'), totalValue);
+    customer.append(selected, total, el('p', 'O cupom será conferido ao registrar o pedido.', 'help'));
+    const detailsWrap = el('div', undefined, 'pos-details'); customer.append(detailsWrap);
+    function section(title, name, tone) {
+      const details = el('details', undefined, `pos-section ${tone}`); details.open = true;
+      const summary = el('summary'); summary.append(icon(name, 'section-icon'), el('span', title));
+      const fields = el('div', undefined, 'form-grid'); details.append(summary, fields); detailsWrap.append(details); return fields;
     }
-    products.append(total); grid.append(products); p.append(form); screen.append(p);
+    const customerFields = section('Dados do cliente', 'person', 'rose');
+    field(customerFields, 'name', 'Nome do cliente', { required: true, maxLength: 100, placeholder: 'Nome de quem vai receber' });
+    field(customerFields, 'phone', 'Telefone do cliente', { type: 'tel', required: true, maxLength: 25, placeholder: '(44) 99999-9999' });
+    const addressFields = section('Endereço de entrega', 'geo-alt', 'purple');
+    field(addressFields, 'street', 'Rua', { required: true, maxLength: 160 });
+    field(addressFields, 'number', 'Número', { required: true, maxLength: 20 });
+    field(addressFields, 'neighborhood', 'Bairro', { required: true, maxLength: 100 });
+    field(addressFields, 'complement', 'Complemento', { maxLength: 160, placeholder: 'Casa, apartamento, referência' });
+    const paymentFields = section('Pagamento e observações', 'credit-card', 'blue');
+    field(paymentFields, 'payment_method', 'Forma de pagamento', { type: 'select', wide: true, choices: [['Pix', 'Pix combinado com a loja'], ['Dinheiro', 'Dinheiro na entrega'], ['Cartão de crédito', 'Cartão de crédito na entrega'], ['Cartão de débito', 'Cartão de débito na entrega']] });
+    field(paymentFields, 'coupon_code', 'Cupom (opcional)', { wide: true, maxLength: 40 });
+    field(paymentFields, 'notes', 'Observações', { type: 'textarea', wide: true, maxLength: 500 });
+    const actions = form.querySelector('.form-actions'); actions.classList.add('pos-submit'); customer.append(actions);
+    const tools = el('div', undefined, 'product-search'); const searchWrap = el('div', undefined, 'search-field');
+    const search = el('input'); search.type = 'search'; search.placeholder = 'Qual produto você procura?'; search.setAttribute('aria-label', 'Buscar produtos'); searchWrap.append(icon('search'), search);
+    const categoryOrder = ['Esfihas tradicionais', 'Esfihas especiais', 'Esfihas doces', 'Combos', 'Bebidas', 'Shawarma'];
+    const categories = [...new Set(state.catalog.map(item => item.category))].sort((a, b) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b));
+    const category = selection('Filtrar produtos por categoria', [['', 'Todas as categorias'], ...categories.map(value => [value, value])]);
+    tools.append(searchWrap, category); products.append(tools);
+    const count = el('p', undefined, 'help product-count'); count.setAttribute('role', 'status'); products.append(count);
+    const productList = el('div', undefined, 'product-list product-grid');
+    const entries = [];
+    function updateSummary() {
+      selected.replaceChildren(); let subtotal = 0;
+      for (const [product, control] of quantityInputs) {
+        const quantity = Math.max(0, numeric(control.value)); const amount = quantity * product.price_cents; subtotal += amount;
+        control.closest('.product-entry').classList.toggle('selected', quantity > 0);
+        if (quantity > 0) {
+          const line = el('p', undefined, 'selected-line'); line.append(el('span', `${quantity}× ${product.name}`), el('strong', money(amount))); selected.append(line);
+        }
+      }
+      if (!selected.childElementCount) selected.append(el('p', 'Adicione produtos para começar.', 'help'));
+      totalValue.textContent = money(subtotal);
+    }
+    state.catalog.forEach((product, index) => {
+      const row = el('div', undefined, 'product-entry'); const input = el('input');
+      input.type = 'number'; input.min = '0'; input.max = '99'; input.step = '1'; input.value = '0'; input.id = `product-${index}`;
+      const labelNode = el('label', product.name); labelNode.htmlFor = input.id; labelNode.append(el('small', product.category), el('strong', money(product.price_cents)));
+      const controls = el('div', undefined, 'quantity-controls');
+      const minus = el('button', '−'); minus.type = 'button'; minus.setAttribute('aria-label', `Diminuir ${product.name} — ${product.category}`);
+      const plus = el('button', '+'); plus.type = 'button'; plus.setAttribute('aria-label', `Adicionar ${product.name} — ${product.category}`);
+      function update() { minus.disabled = numeric(input.value) <= 0; plus.disabled = numeric(input.value) >= 99; updateSummary(); }
+      minus.addEventListener('click', () => { input.value = Math.max(0, numeric(input.value) - 1); update(); });
+      plus.addEventListener('click', () => { input.value = Math.min(99, numeric(input.value) + 1); update(); });
+      input.addEventListener('input', update); minus.disabled = true;
+      input.addEventListener('invalid', () => { search.value = ''; category.value = ''; filterProducts(); });
+      quantityInputs.push([product, input]); controls.append(minus, input, plus); row.append(labelNode, controls);
+      entries.push([row, product]);
+    });
+    entries.sort(([, a], [, b]) => categories.indexOf(a.category) - categories.indexOf(b.category));
+    entries.forEach(([row]) => productList.append(row)); products.append(productList);
+    const noResults = el('p', 'Nenhum produto encontrado. Tente outra busca ou categoria.', 'empty'); noResults.hidden = true; products.append(noResults);
+    function filterProducts() {
+      const query = normalize(search.value).trim(); let visible = 0;
+      for (const [row, product] of entries) { row.hidden = Boolean(category.value && product.category !== category.value) || !normalize(`${product.name} ${product.category}`).includes(query); if (!row.hidden) visible++; }
+      count.textContent = `${visible} produto${visible === 1 ? '' : 's'} ${visible === 1 ? 'disponível' : 'disponíveis'}`;
+      noResults.hidden = visible > 0;
+    }
+    search.addEventListener('input', filterProducts); category.addEventListener('change', filterProducts); filterProducts(); updateSummary();
+    grid.append(products, customer); screen.append(form);
   }
 
   async function loadDashboard(screen) {
@@ -326,7 +482,9 @@
     const metrics = el('div', undefined, 'metrics');
     for (const [label, value] of [['Pedidos registrados', data.orders_count || 0], ['Vendas', money(data.sales_cents)], ['Ticket médio', money(data.ticket_cents)]]) { const card = el('div', undefined, 'metric'); card.append(el('p', label), el('strong', value)); metrics.append(card); }
     screen.append(metrics);
-    const statusPanel = panel('Pedidos por situação'); statusPanel.append(table('Pedidos por situação', [['Situação', row => statuses[row.status] || row.status], ['Pedidos', row => row.count]], list(data, 'by_status')));
+    const groupedStatuses = new Map();
+    for (const row of list(data, 'by_status')) { const key = stageKey(row.status); groupedStatuses.set(key, (groupedStatuses.get(key) || 0) + numeric(row.count)); }
+    const statusPanel = panel('Pedidos por situação'); statusPanel.append(table('Pedidos por situação', [['Situação', row => statuses[row.status] || row.status], ['Pedidos', row => row.count]], [...groupedStatuses].map(([status, count]) => ({ status, count }))));
     const daily = panel('Vendas por dia'); daily.append(table('Vendas por dia', [['Data', row => row.date], ['Vendas', row => money(row.total_cents)]], list(data, 'daily_sales')));
     screen.append(statusPanel, daily);
     if ('conversion_rate' in data) {
@@ -514,6 +672,11 @@
     const view = state.view;
     state.fieldIds.clear();
     $('screen-title').textContent = views[view][0]; $('screen-description').textContent = views[view][1];
+    const group = navGroups.find(([, items]) => items.some(([key]) => key === view));
+    $('screen-category').textContent = group?.[0] || 'Gestão';
+    $('breadcrumb-current').textContent = view === 'orders' ? 'Pedidos' : views[view][0];
+    $('new-order').hidden = view === 'pos'; $('refresh').hidden = view === 'pos';
+    $('screen').dataset.view = view;
     document.querySelectorAll('#navigation button').forEach(control => { if (control.dataset.view === view) control.setAttribute('aria-current', 'page'); else control.removeAttribute('aria-current'); });
     $('screen').replaceChildren(el('p', 'Carregando dados da loja…', 'loading')); $('screen').setAttribute('aria-busy', 'true');
     const fragment = document.createDocumentFragment();
@@ -525,10 +688,31 @@
     } finally { if (generation === state.generation) $('screen').setAttribute('aria-busy', 'false'); }
   }
 
-  for (const [key, [label]] of Object.entries(views)) {
-    const nav = el('button', label); nav.type = 'button'; nav.dataset.view = key;
-    nav.addEventListener('click', () => { state.view = key; showNotice(''); renderView(); $('content').focus({ preventScroll: true }); }); $('navigation').append(nav);
+  for (const [label, items] of navGroups) {
+    const group = el('div', undefined, 'nav-group'); group.append(el('p', label, 'nav-group-title'));
+    for (const [key, title, name] of items) {
+      const nav = el('button', undefined, 'nav-link'); nav.type = 'button'; nav.dataset.view = key;
+      nav.append(icon(name, 'nav-icon'), el('span', title, 'nav-label'));
+      nav.addEventListener('click', () => navigate(key)); group.append(nav);
+    }
+    $('navigation').append(group);
   }
+
+  $('new-order').addEventListener('click', () => navigate('pos'));
+  $('menu-toggle').addEventListener('click', () => document.body.classList.contains('sidebar-open') ? closeMenu() : openMenu());
+  $('menu-close').addEventListener('click', () => closeMenu());
+  $('sidebar-overlay').addEventListener('click', () => closeMenu());
+  mobileMenu.addEventListener('change', () => closeMenu(false));
+  document.addEventListener('keydown', event => {
+    if (!document.body.classList.contains('sidebar-open')) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeMenu(); }
+    if (event.key === 'Tab') {
+      const controls = [...$('sidebar').querySelectorAll('a, button')].filter(control => !control.disabled && control.getClientRects().length);
+      const first = controls[0]; const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  });
 
   $('login-form').addEventListener('submit', event => {
     event.preventDefault(); const control = event.currentTarget.querySelector('button');
@@ -537,7 +721,7 @@
       try {
         const data = await api('/admin/login', { method: 'POST', body: { password } });
         if (!data.csrf_token) throw new Error('O servidor não validou a sessão. Tente novamente.');
-        state.csrf = data.csrf_token; showNotice(''); setAccess('workspace'); await renderView(); $('content').focus();
+        state.csrf = data.csrf_token; showNotice(''); setAccess('workspace'); await renderView(); $('content').focus({ preventScroll: true });
       } finally { $('admin-password').value = ''; }
     });
   });

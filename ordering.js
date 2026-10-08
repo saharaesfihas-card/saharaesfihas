@@ -64,7 +64,7 @@
   function validResponse(order) {
     return order && typeof order.id === 'string' && order.id.length > 0 && order.id.length <= 100 &&
       Number.isSafeInteger(order.total_cents) && order.total_cents >= 0 &&
-      ['new', 'confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled'].includes(order.status);
+      ['new', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled'].includes(order.status);
   }
   function trackingURL(order, apiBase) {
     if (typeof order.tracking_url !== 'string' || !order.tracking_url) return '';

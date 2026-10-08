@@ -70,6 +70,7 @@ async function newPage(options = {}) {
       return window.__popup;
     };
   });
+  await context.route('**/system-config.js*', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: `window.SaharaSystemConfig = { apiBase: ${JSON.stringify(options.apiBase || '')} };` }));
   await page.goto(`${baseURL}/index.html`, { waitUntil: 'load' });
   if (!await page.evaluate(() => Boolean(window.saharaOrdering))) {
     await page.addScriptTag({ url: `${baseURL}/ordering.js` });
@@ -291,7 +292,7 @@ async function run() {
     assert.equal(requestKey(requests[0]), requestKey(requests[1]), 'A network retry must reuse its original order key');
   }, { apiBase: '/api' });
 
-  await test('A retry accepts the current confirmed status of the original order without creating a duplicate', async page => {
+  await test('A retry accepts the ready stage of the original order without creating a duplicate', async page => {
     await address(page);
     const requests = [];
     await page.route(`${baseURL}/api/orders`, async route => {
@@ -300,7 +301,7 @@ async function run() {
         // The original order may have been saved before its response was lost.
         await route.abort('failed');
       } else {
-        await route.fulfill({ status: 200, json: { ...success, status: 'confirmed' } });
+        await route.fulfill({ status: 200, json: { ...success, status: 'ready' } });
       }
     });
     await page.locator('#checkout').click();

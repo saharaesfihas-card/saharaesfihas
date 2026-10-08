@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomBytes } = require('node:crypto');
-const { mkdtemp, rm } = require('node:fs/promises');
+const { mkdtemp, mkdir, rm } = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -62,6 +62,12 @@ async function api(route, options = {}) {
 }
 
 async function view(key) {
+  await page.waitForFunction(() => {
+    const mobile = window.matchMedia('(max-width: 800px)').matches;
+    const open = document.body.classList.contains('sidebar-open');
+    return document.getElementById('sidebar').inert === (mobile && !open);
+  });
+  if (await page.locator('#sidebar').evaluate(node => node.inert)) await page.locator('#menu-toggle').click();
   await page.locator(`#navigation button[data-view="${key}"]`).click();
   await page.locator('#screen[aria-busy="false"]').waitFor();
   assert.equal(await page.locator('#screen .danger-text').count(), 0, await page.locator('#screen').innerText());
@@ -76,12 +82,24 @@ async function submit(label, route, method = 'POST') {
   return result.json();
 }
 
+async function capture(name) {
+  if (!process.env.SAHARA_LAYOUT_CAPTURE_DIR) return;
+  const target = path.resolve(process.env.SAHARA_LAYOUT_CAPTURE_DIR);
+  await mkdir(target, { recursive: true });
+  await page.evaluate(async () => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
+  await page.screenshot({ path: path.join(target, `${name}.png`), fullPage: false });
+}
+
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
 
 async function run() {
   await start();
   await check('Restricted access, real login and ephemeral session', async () => {
     await page.locator('#login-panel:not([hidden])').waitFor();
+    await capture('login-desktop');
     await api('/admin/orders', { status: 401 });
     await page.locator('#admin-password').fill('incorrect-test-password');
     const denied = page.waitForResponse(response => response.url().endsWith('/api/admin/login'));
@@ -139,22 +157,115 @@ async function run() {
     await view('drivers'); await page.locator('#field-drivers-name').fill('Entregador teste'); await page.locator('#field-drivers-phone').fill('44999992222'); await submit('Cadastrar entregador', '/admin/drivers');
     assert.equal((await api('/admin/drivers')).drivers.length, 1);
   });
+  await check('Product search and category preserve client, quantities and calculated summary', async () => {
+    await view('pos');
+    const catalog = (await api('/catalog')).products;
+    const carne = page.locator(`#product-${catalog.findIndex(product => product.id === 'carne')}`);
+    const coca = page.locator(`#product-${catalog.findIndex(product => product.id === 'coca-350')}`);
+    await page.locator('#field-pos-name').fill('Rascunho do cliente'); await carne.fill('2');
+    await page.getByRole('searchbox', { name: 'Buscar produtos', exact: true }).fill('Coca');
+    await page.getByRole('combobox', { name: 'Filtrar produtos por categoria', exact: true }).selectOption('Bebidas');
+    assert.equal(await carne.isVisible(), false); assert.equal(await carne.inputValue(), '2');
+    await coca.fill('1');
+    assert.match(await page.locator('.pos-customer .product-summary').innerText(), /14,00/);
+    assert.match(await page.locator('.selected-items').innerText(), /2× Carne/);
+    assert.match(await page.locator('.selected-items').innerText(), /1× Coca-Cola lata 350 ml/);
+    await page.getByRole('searchbox', { name: 'Buscar produtos', exact: true }).fill('cArNe');
+    await page.getByRole('combobox', { name: 'Filtrar produtos por categoria', exact: true }).selectOption('Esfihas tradicionais');
+    assert.equal(await carne.isVisible(), true); assert.equal(await coca.isVisible(), false);
+    assert.equal(await page.locator('#field-pos-name').inputValue(), 'Rascunho do cliente');
+    assert.match(await page.locator('.pos-customer .product-summary').innerText(), /14,00/);
+    assert.equal((await api('/admin/orders')).orders.length, 0);
+  });
+  await check('Empty product search preserves selected items and can be cleared', async () => {
+    const search = page.getByRole('searchbox', { name: 'Buscar produtos', exact: true });
+    await search.fill('zzzz-sem-produto');
+    assert.equal(await page.locator('.product-entry:visible').count(), 0);
+    assert.equal(await page.getByText('Nenhum produto encontrado. Tente outra busca ou categoria.', { exact: true }).isVisible(), true);
+    assert.match(await page.locator('.pos-customer .product-summary').innerText(), /14,00/);
+    assert.equal(await page.locator('#field-pos-name').inputValue(), 'Rascunho do cliente');
+    await search.fill(''); await page.getByRole('combobox', { name: 'Filtrar produtos por categoria', exact: true }).selectOption('');
+    assert.ok(await page.locator('.product-entry:visible').count() > 10);
+    assert.equal(await page.getByText('Nenhum produto encontrado. Tente outra busca ou categoria.', { exact: true }).isVisible(), false);
+  });
+  await check('Collapsed required sections open before native validation focuses the field', async () => {
+    await view('pos');
+    const catalog = (await api('/catalog')).products;
+    await page.locator(`#product-${catalog.findIndex(product => product.id === 'carne')}`).fill('1');
+    await page.locator('.pos-section').evaluateAll(sections => sections.forEach(section => { section.open = false; }));
+    await page.getByRole('button', { name: 'Registrar pedido', exact: true }).click();
+    assert.equal(await page.locator('#field-pos-name').evaluate(field => field.closest('details').open), true);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'field-pos-name');
+    assert.equal((await api('/admin/orders')).orders.length, 0);
+    await page.locator('#field-pos-name').fill('Cliente em rascunho'); await page.locator('#field-pos-phone').fill('44999994444');
+    await page.locator('#field-pos-street').evaluate(field => { field.closest('details').open = false; });
+    await page.getByRole('button', { name: 'Registrar pedido', exact: true }).click();
+    assert.equal(await page.locator('#field-pos-street').evaluate(field => field.closest('details').open), true);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'field-pos-street');
+    assert.equal((await api('/admin/orders')).orders.length, 0);
+  });
+  await check('A filtered invalid quantity reappears for native validation without creating an order', async () => {
+    await view('pos');
+    const catalog = (await api('/catalog')).products;
+    const invalid = page.locator(`#product-${catalog.findIndex(product => product.id === 'carne')}`);
+    for (const [field, value] of Object.entries({ name: 'Cliente em rascunho', phone: '44999994444', street: 'Rua de teste', number: '10', neighborhood: 'Centro' })) await page.locator(`#field-pos-${field}`).fill(value);
+    await invalid.fill('-1');
+    await page.getByRole('combobox', { name: 'Filtrar produtos por categoria', exact: true }).selectOption('Bebidas');
+    assert.equal(await invalid.isVisible(), false);
+    await page.getByRole('button', { name: 'Registrar pedido', exact: true }).click();
+    assert.equal(await invalid.isVisible(), true);
+    assert.equal(await page.getByRole('combobox', { name: 'Filtrar produtos por categoria', exact: true }).inputValue(), '');
+    assert.equal(await page.evaluate(() => document.activeElement.id), await invalid.getAttribute('id'));
+    assert.equal((await api('/admin/orders')).orders.length, 0);
+  });
   await check('PDV uses catalog prices and server coupon total', async () => {
     await view('pos');
     for (const [field, value] of Object.entries({ name: 'Cliente teste', phone: '44999991111', street: 'Rua de teste', number: '10', neighborhood: 'Centro', coupon_code: 'TESTE10' })) await page.locator(`#field-pos-${field}`).fill(value);
     const catalog = (await api('/catalog')).products;
     const index = catalog.findIndex(product => product.id === 'carne'); assert.ok(index >= 0);
     await page.locator(`#product-${index}`).fill('2');
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.locator('.pos-details').evaluate(node => { node.scrollTop = 0; });
+    const submitBox = await page.getByRole('button', { name: 'Registrar pedido', exact: true }).boundingBox();
+    assert.ok(submitBox && submitBox.y + submitBox.height <= 900, 'Desktop submit stays visible beside the product catalog');
+    await capture('pdv-desktop');
     const receipt = await submit('Registrar pedido', '/admin/orders');
     assert.equal(receipt.total_cents, 720);
     order = (await api('/admin/orders')).orders[0]; assert.equal(order.source, 'pdv'); assert.equal(order.items[0].price_cents, 400);
     assert.match(await page.locator('.order-total').innerText(), /7,20/);
+    assert.equal(order.status, 'preparing');
+    assert.equal(await page.locator('.order-progress .order-stage').count(), 4);
+    await capture('orders-desktop');
     customer = (await api('/admin/customers')).customers.find(row => row.phone === '44999991111');
     assert.equal(customer.points, 0);
   });
-  await check('Kitchen confirmation consumes ingredients, print uses real order', async () => {
-    await page.getByRole('button', { name: 'Atualizar situação', exact: true }).click();
-    await waitFor(async () => (await api('/admin/orders')).orders[0].status === 'confirmed', 'Order did not confirm');
+  await check('Order search filters client, phone and short ID locally while preserving full identifiers', async () => {
+    const requests = [];
+    const capture = request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(request.url()); };
+    page.on('request', capture);
+    try {
+      const heading = page.locator('.order-card h2');
+      assert.match(await heading.innerText(), new RegExp(order.id.slice(0, 8).toUpperCase()));
+      assert.ok([await heading.getAttribute('title'), await heading.getAttribute('aria-label')].some(value => value?.includes(order.id)));
+      const overview = label => page.locator('.overview-card').filter({ has: page.getByText(label, { exact: true }) }).locator('.overview-value');
+      assert.equal(await overview('Em preparo na cozinha').innerText(), '1');
+      assert.equal(await overview('Pedido pronto').innerText(), '0');
+      const search = page.getByRole('searchbox', { name: 'Buscar pedidos', exact: true });
+      for (const query of ['Cliente teste', '44999991111', order.id.slice(0, 8)]) {
+        await search.fill(query); assert.equal(await page.locator('.order-card:visible').count(), 1);
+      }
+      await search.fill('zzzz-sem-pedido'); assert.equal(await page.locator('.order-card:visible').count(), 0);
+      assert.equal(await page.locator('.empty-state').isVisible(), true);
+      await search.fill(''); assert.equal(await page.locator('.order-card:visible').count(), 1);
+      assert.deepEqual(requests, [], 'Searching existing orders must not send API requests');
+    } finally { page.off('request', capture); }
+  });
+  await check('Preparation consumes ingredients once, ready stage and print use real order', async () => {
+    assert.equal((await api('/admin/orders')).orders[0].status, 'preparing');
+    assert.equal(await page.locator('.order-progress [aria-current="step"] .stage-label').innerText(), 'Em preparo na cozinha');
+    await submit('Atualizar situação', `/admin/orders/${order.id}`, 'PATCH');
+    assert.equal((await api('/admin/orders')).orders[0].status, 'ready');
+    assert.equal(await page.locator('.order-progress [aria-current="step"] .stage-label').innerText(), 'Pedido pronto');
     assert.equal((await api('/admin/inventory')).items.find(row => row.id === flour.id).on_hand, 980);
     await page.getByRole('button', { name: 'Imprimir comanda', exact: true }).click();
     assert.equal(await page.evaluate(() => window.__printCalls), 1); assert.match(await page.locator('#print-target').textContent(), /Cliente teste/);
@@ -182,9 +293,13 @@ async function run() {
     const response = page.waitForResponse(response => response.url().endsWith(`/api/admin/orders/${order.id}`) && response.request().method() === 'PATCH');
     await page.getByRole('button', { name: 'Atualizar situação', exact: true }).click();
     assert.equal((await response).status(), 409);
-    for (const status of ['preparing', 'out_for_delivery', 'delivered']) {
+    for (const status of ['out_for_delivery', 'delivered']) {
       await page.getByRole('combobox', { name: `Próxima situação do pedido ${order.id}`, exact: true }).selectOption(status);
       await submit('Atualizar situação', `/admin/orders/${order.id}`, 'PATCH');
+      if (status === 'delivered') await page.getByRole('combobox', { name: 'Filtrar pedidos por situação', exact: true }).selectOption('all');
+      await page.locator('#screen[aria-busy="false"]').waitFor();
+      const currentLabel = status === 'delivered' ? 'Entregue' : 'A caminho do endereço';
+      assert.equal(await page.locator('.order-progress [aria-current="step"] .stage-label').innerText(), currentLabel);
     }
     assert.equal((await api('/admin/orders')).orders[0].status, 'delivered');
     assert.equal((await api('/admin/customers')).customers.find(row => row.id === customer.id).points, 0);
@@ -228,6 +343,63 @@ async function run() {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     const ids = await page.locator('[id]').evaluateAll(nodes => nodes.map(node => node.id)); assert.equal(new Set(ids).size, ids.length);
     if (process.env.SAHARA_TEST_SCREENSHOT) await page.screenshot({ path: process.env.SAHARA_TEST_SCREENSHOT, fullPage: true });
+  });
+  await check('Mobile drawer closes with Escape, overlay and navigation while restoring focus', async () => {
+    for (const width of [390, 800]) {
+      await page.setViewportSize({ width, height: 844 });
+      if (width === 390) { await view('orders'); await capture('orders-mobile'); }
+      await page.locator('#menu-toggle').click();
+      assert.equal(await page.locator('#menu-toggle').getAttribute('aria-expanded'), 'true');
+      assert.equal(await page.locator('#sidebar-overlay').isVisible(), true);
+      assert.equal(await page.locator('#content').evaluate(node => node.inert), true);
+      if (width === 390) await capture('drawer-mobile');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'menu-close');
+      const firstLink = page.locator('#sidebar a').first();
+      await firstLink.focus(); await page.keyboard.press('Shift+Tab');
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'integrations');
+      await page.keyboard.press('Tab');
+      assert.equal(await firstLink.evaluate(node => document.activeElement === node), true);
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('#menu-toggle').getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.locator('#sidebar-overlay').isVisible(), false);
+      assert.equal(await page.locator('#sidebar').evaluate(node => node.inert), true);
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'menu-toggle');
+      await page.locator('#menu-toggle').click();
+      await page.mouse.click(width - 12, 150);
+      assert.equal(await page.locator('#menu-toggle').getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'menu-toggle');
+      await view('dashboard');
+      assert.equal(await page.locator('#menu-toggle').getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'content');
+      assert.equal(await page.locator('#navigation [data-view="dashboard"]').getAttribute('aria-current'), 'page');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `Body overflow at ${width}px`);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.waitForFunction(() => !document.getElementById('sidebar').inert);
+    assert.equal(await page.locator('#sidebar').evaluate(node => node.inert), false);
+    assert.equal(await page.locator('#sidebar-overlay').isVisible(), false);
+  });
+  await check('Every management module loads without document overflow at 390px and 800px', async () => {
+    const modules = ['orders', 'pos', 'dashboard', 'inventory', 'cash', 'receivables', 'customers', 'coupons', 'loyalty', 'campaigns', 'drivers', 'reviews', 'integrations'];
+    for (const width of [390, 800]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const module of modules) {
+        await view(module);
+        if (width === 390 && module === 'pos') {
+          const catalog = (await api('/catalog')).products;
+          await page.locator(`#product-${catalog.findIndex(product => product.id === 'carne')}`).fill('2');
+          await page.evaluate(() => window.scrollTo(0, 0));
+          await page.locator('.product-list').evaluate(node => { node.scrollTop = 0; });
+          await capture('pdv-mobile');
+          await page.locator('.pos-customer').scrollIntoViewIfNeeded();
+          await capture('pdv-mobile-details');
+        }
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${module}: body overflow at ${width}px`);
+        const ids = await page.locator('[id]').evaluateAll(nodes => nodes.map(node => node.id));
+        assert.equal(new Set(ids).size, ids.length, `${module}: duplicate field IDs`);
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
   });
   await check('Public menu registers one real order and retries without duplicate or WhatsApp send', async () => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', timezoneId: 'America/Sao_Paulo' });

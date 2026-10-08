@@ -269,7 +269,7 @@ def coupon_discount(conn: sqlite3.Connection, code: str | None, subtotal_cents: 
 
 
 def record_coupon_use(conn: sqlite3.Connection, order: sqlite3.Row | dict[str, Any]) -> bool:
-    """Claim one use during order confirmation, in the caller's transaction.
+    """Claim one use when preparation starts, in the caller's transaction.
 
     Historical uses stay consumed after cancellation. Raising rolls back the
     order transition and its claim through core.db's transaction context.
