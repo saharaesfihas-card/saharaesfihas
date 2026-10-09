@@ -11,6 +11,7 @@ O [painel do PDV](https://sahara-esfihas-pdv.onrender.com/admin.html) e a API es
 | Cardápio e sacola | Produtos, preços, registro da solicitação no PDV e mensagem preparada para envio pelo cliente ao WhatsApp. |
 | Endereço e localização | Endereço manual ou ponto de localização conferido e confirmado pelo cliente; o número da casa continua obrigatório. |
 | Ajuda no cardápio | Respostas locais sobre produtos, horário, entrega e como pedir. Não é um chatbot com IA nem atende conversas no WhatsApp. |
+| WhatsApp | Conector Evolution API por QR Code, menu de atendimento, consulta do próprio pedido, atendimento pela equipe e avisos das etapas para clientes que autorizaram. A ativação exige servidor Evolution, credenciais e pareamento do número. |
 | Pedidos, PDV e cozinha | Registro persistente de pedidos, histórico e etapas operadas pela loja. O PDV também registra pedidos recebidos por telefone ou WhatsApp. |
 | Estoque | Itens, entradas, saídas e indicação de reposição no painel. A API também permite cadastrar fichas técnicas; a entrada do pedido em preparo consome o estoque configurado. Produtos sem vínculo de estoque não têm disponibilidade controlada. |
 | Caixa e fiado | Abertura, fechamento, movimentações, registro manual de pagamento e recebimentos de fiado. Registrar um recebimento não realiza uma cobrança online. |
@@ -27,9 +28,13 @@ Os módulos de gestão usam um banco SQLite privado no servidor. Eles não depen
 
 ## Integrações que precisam de ativação
 
-O painel informa estas integrações como **pendentes**, com o motivo de cada pendência:
+O atendimento e os avisos de WhatsApp estão implementados, com fila persistente e conexão por QR Code no painel privado. O número da loja é **(44) 99174-8318**. A integração permanece desligada enquanto o servidor Evolution não estiver hospedado e conectado. Consulte [WHATSAPP.md](WHATSAPP.md) para instalar o serviço separado e cadastrar as credenciais com segurança. A Evolution usa Baileys/WhatsApp Web nesse modo; a alternativa oficial da Meta está documentada separadamente.
 
-- WhatsApp Business Platform, chatbot com IA e envio de campanhas;
+Os avisos dependem da autorização específica do cliente, que pode ser marcada no cardápio ou no PDV e revogada com `PARAR`. Ela não autoriza promoções. A indicação de configuração presente não confirma conexão, envio ou entrega; o painel consulta a conexão e distingue cada resultado no histórico.
+
+As demais integrações continuam **pendentes**, com o motivo de cada pendência:
+
+- atendimento com IA e envio de campanhas;
 - pagamento online com cartão ou Pix e confirmação por webhook;
 - emissão fiscal;
 - iFood, Entrega Fácil e F360;

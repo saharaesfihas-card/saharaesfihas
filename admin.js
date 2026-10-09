@@ -671,24 +671,54 @@
     const byQR = data.provider === 'evolution';
     const setup = panel('WhatsApp da Sahara', 'Atendimento automático, consulta de pedidos e avisos de andamento. Novos pedidos são finalizados no cardápio e registrados no PDV.');
     setup.append(el('p', data.configured ? 'Configuração presente no servidor. A confirmação de envio aparece no histórico abaixo.' : byQR ? 'Ativação pendente: configure o serviço Evolution API no Render para conectar pelo QR Code.' : 'Ativação pendente: conecte o número à API oficial da Meta e configure as credenciais no Render.'));
+    if (!data.configured && byQR) {
+      const guide = el('details', undefined, 'whatsapp-setup');
+      guide.append(el('summary', 'Preparar a conexão com a Evolution API'));
+      const steps = el('ol');
+      steps.append(el('li', 'Instale a Evolution API em um servidor e tenha a URL HTTPS e o nome da instância da loja.'), el('li', 'Cadastre a URL, a instância, a chave de acesso e o segredo do webhook nas variáveis do servidor do PDV no Render. Guarde os segredos somente no servidor.'), el('li', 'Ative SAHARA_WHATSAPP_ENABLED=1, reinicie o serviço e atualize esta tela. Depois, gere o QR Code para conectar o WhatsApp Business da loja.'));
+      guide.append(steps);
+      const missing = list(data, 'missing').filter(key => typeof key === 'string' && /^SAHARA_[A-Z_]{1,80}$/.test(key));
+      if (missing.length) {
+        guide.append(el('p', 'Variáveis ainda não configuradas:', 'help'));
+        const keys = el('ul', undefined, 'whatsapp-missing');
+        for (const key of missing) { const item = el('li'); item.append(el('code', key)); keys.append(item); }
+        guide.append(keys);
+      }
+      setup.append(guide);
+    }
     if (byQR) {
-      const statuses = { open: 'Conectado', close: 'Desconectado', connecting: 'Aguardando conexão pelo celular', not_created: 'Pronto para criar a conexão', not_configured: 'Configuração pendente', unavailable: 'Serviço indisponível' };
+      const statuses = { open: 'Conectado', close: 'Desconectado', connecting: 'Aguardando conexão pelo celular', not_created: 'Pronto para criar a conexão', not_configured: 'Configuração pendente', unavailable: 'Serviço indisponível', wrong_number: 'Número conectado diferente do WhatsApp da loja' };
       const connection = el('p', `WhatsApp: ${statuses[data.connection?.state] || 'Não confirmado'}`);
-      connection.setAttribute('role', 'status'); setup.append(connection);
+      connection.setAttribute('role', 'status'); connection.setAttribute('aria-atomic', 'true'); setup.append(connection);
       if (data.connection?.error) setup.append(el('p', data.connection.error, 'help'));
       const pairing = el('div', undefined, 'whatsapp-pairing');
+      pairing.setAttribute('aria-live', 'polite');
+      let expiry;
       const control = button(data.connection?.connected ? 'Verificar conexão' : 'Gerar QR Code', async () => {
+        clearTimeout(expiry);
         pairing.replaceChildren();
         connection.textContent = 'Preparando conexão…';
+        control.setAttribute('aria-busy', 'true');
         try {
           const result = await api('/admin/whatsapp/connect', { method: 'POST', body: {} });
           connection.textContent = `WhatsApp: ${statuses[result.state] || 'Aguardando conexão pelo celular'}`;
+          control.textContent = result.connected ? 'Verificar conexão' : 'Gerar QR Code';
           if (result.connected) { showNotice('WhatsApp conectado.'); return; }
+          if (result.state === 'wrong_number') {
+            pairing.append(el('p', 'A instância está conectada a outro número. Desconecte esse aparelho na Evolution API e conecte o WhatsApp da loja.'));
+            return;
+          }
           if (result.qrcode) {
+            if (!validWhatsAppQR(result.qrcode)) throw new Error('O serviço retornou um QR Code inválido. Confira a conexão e gere outro.');
             const image = el('img'); image.src = result.qrcode; image.alt = 'QR Code para conectar o WhatsApp da Sahara'; image.width = 280; image.height = 280;
+            image.addEventListener('error', () => { pairing.replaceChildren(el('p', 'Não foi possível exibir o QR Code. Gere outro para tentar novamente.')); });
             pairing.append(image, el('p', 'No WhatsApp Business, abra Aparelhos conectados e toque em Conectar um aparelho. Escaneie este QR Code.'));
+            expiry = setTimeout(() => {
+              if (image.isConnected) pairing.replaceChildren(el('p', 'Este QR Code pode ter expirado. Gere outro QR Code para conectar o aparelho.'));
+            }, 120000);
           } else pairing.append(el('p', 'O QR Code ainda não está pronto. Aguarde alguns segundos e toque em Gerar QR Code novamente.'));
         } catch (error) { connection.textContent = 'Conexão não confirmada.'; throw error; }
+        finally { control.removeAttribute('aria-busy'); }
       });
       control.disabled = !data.configured;
       setup.append(control, pairing, el('p', 'Após escanear, use Atualizar dados para confirmar a conexão. Se o QR Code expirar, gere outro. O pareamento deve ser feito com o WhatsApp da loja.', 'help'));
@@ -726,6 +756,12 @@
       });
     }]], list(data, 'messages'), 'Nenhuma mensagem na fila.'));
     screen.append(history);
+  }
+
+  function validWhatsAppQR(value) {
+    if (typeof value !== 'string' || value.length > 100000 || !/^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(value)) return false;
+    try { return atob(value.slice('data:image/png;base64,'.length)).slice(0, 8) === '\x89PNG\r\n\x1a\n'; }
+    catch { return false; }
   }
 
   const loaders = { orders: loadOrders, pos: loadPos, dashboard: loadDashboard, inventory: loadInventory, cash: loadCash, receivables: loadReceivables, customers: loadCustomers, coupons: loadCoupons, loyalty: loadLoyalty, campaigns: loadCampaigns, drivers: loadDrivers, reviews: loadReviews, integrations: loadIntegrations };

@@ -1,5 +1,7 @@
 """WhatsApp: Evolution API por QR ou Cloud API, com fila privada persistente."""
 from contextlib import asynccontextmanager
+import asyncio
+from datetime import datetime
 import hashlib
 import hmac
 import json
@@ -10,7 +12,7 @@ import time
 from types import SimpleNamespace
 import unicodedata
 from urllib.error import HTTPError, URLError
-from urllib.request import Request as URLRequest, urlopen
+from urllib.request import Request as URLRequest
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -35,20 +37,97 @@ def config():
                   provider=os.environ.get('SAHARA_WHATSAPP_PROVIDER', 'evolution').strip(),
                   template=os.environ.get('SAHARA_WHATSAPP_ORDER_TEMPLATE', '').strip(),
                   language=os.environ.get('SAHARA_WHATSAPP_TEMPLATE_LANGUAGE', 'pt_BR').strip(),
+                  SAHARA_EVOLUTION_EXPECTED_NUMBER=os.environ.get('SAHARA_EVOLUTION_EXPECTED_NUMBER', evolution.DEFAULT_NUMBER).strip(),
                   menu=os.environ.get('SAHARA_PUBLIC_URL', 'https://sahara-esfihas-pdv.onrender.com').rstrip('/') + '/index.html')
     required = evolution.REQUIRED if values['provider'] == 'evolution' else REQUIRED
     valid = evolution.valid_config(values) if values['provider'] == 'evolution' else bool(
         values['provider'] == 'meta' and re.fullmatch(r'v\d+\.\d+', version)
         and values['SAHARA_WHATSAPP_PHONE_NUMBER_ID'].isdigit())
-    values['ready'] = values['enabled'] and all(values[key] for key in required) and valid
+    values['ready'] = values['enabled'] and all(values[key] for key in required) and valid and evolution.valid_url(values['menu'])
     return values
 
 
-def phone(value):
+def evolution_fingerprint(cfg):
+    """The cache belongs to this exact deployment configuration, not just a name."""
+    keys = evolution.REQUIRED + ('SAHARA_EVOLUTION_EXPECTED_NUMBER', 'menu', 'provider', 'enabled')
+    return hashlib.sha256(json.dumps({key: cfg[key] for key in keys}, sort_keys=True).encode()).hexdigest()
+
+
+def cache_evolution_connection(conn, cfg, state):
+    put_setting(conn, 'evolution_connection', state)
+    put_setting(conn, 'evolution_connection_at', utcnow())
+    put_setting(conn, 'evolution_connection_fingerprint', evolution_fingerprint(cfg))
+
+
+def verified_evolution_connection(conn, cfg):
+    if (not cfg['ready'] or setting(conn, 'evolution_connection') != 'open'
+            or setting(conn, 'evolution_connection_fingerprint') != evolution_fingerprint(cfg)):
+        return False
+    try:
+        checked = datetime.fromisoformat(setting(conn, 'evolution_connection_at')).timestamp()
+        return 0 <= time.time() - checked <= 30
+    except (ValueError, TypeError):
+        return False
+
+
+def phone(value, *, international=False):
     digits = re.sub(r'\D', '', str(value))
-    if len(digits) in (10, 11):
+    if len(digits) in (10, 11) and not international and not str(value).lstrip().startswith('+'):
         digits = '55' + digits
-    return digits if 10 <= len(digits) <= 15 else ''
+    return evolution.canonical_phone(digits)
+
+
+def contact_identity(conn, recipient):
+    """Read legacy 8-digit mobile contacts conservatively, without losing consent."""
+    aliases = evolution.phone_aliases(recipient)
+    if not aliases:
+        return None
+    placeholders = ','.join('?' for _ in aliases)
+    row = conn.execute(f'''SELECT MAX(last_inbound) AS last_inbound,
+        MAX(human_until) AS human_until,MAX(opted_out) AS opted_out
+        FROM whatsapp_contacts WHERE phone IN ({placeholders})''', aliases).fetchone()
+    return dict(row) if row and row['last_inbound'] is not None else None
+
+
+def update_contact_identity(conn, recipient, column, value):
+    if column not in ('human_until', 'opted_out'):
+        raise ValueError('Campo de contato inválido.')
+    aliases = evolution.phone_aliases(recipient)
+    if not aliases:
+        return 0
+    if column == 'human_until' and value > 0:
+        previous = contact_identity(conn, recipient)
+        value = max(value, previous['human_until'] if previous else 0)
+    placeholders = ','.join('?' for _ in aliases)
+    expression = f'MAX({column},?)' if column == 'human_until' and value > 0 else '?'
+    return conn.execute(f'UPDATE whatsapp_contacts SET {column}={expression} WHERE phone IN ({placeholders})',
+                        (value, *aliases)).rowcount
+
+
+def order_phone_aliases(recipient):
+    aliases = evolution.phone_aliases(recipient)
+    # Orders entered with a Brazilian DDD are stored without the country code.
+    national = tuple(number[2:] for number in aliases if number.startswith('55') and len(number) in (12, 13))
+    return aliases + national
+
+
+def conversations(conn):
+    """Present one conversation while retaining historical rows for either JID."""
+    result, seen = [], set()
+    for row in conn.execute('SELECT phone FROM whatsapp_contacts ORDER BY last_inbound DESC LIMIT 100').fetchall():
+        recipient = evolution.canonical_phone(row['phone'])
+        if not recipient or recipient in seen:
+            continue
+        seen.add(recipient)
+        contact = contact_identity(conn, recipient)
+        aliases = evolution.phone_aliases(recipient)
+        placeholders = ','.join('?' for _ in aliases)
+        message = conn.execute(f'''SELECT body FROM whatsapp_inbound WHERE phone IN ({placeholders})
+            ORDER BY created_at DESC,rowid DESC LIMIT 1''', aliases).fetchone()
+        result.append({'phone': recipient, **contact, 'last_message': message['body'] if message else None})
+        if len(result) == 50:
+            break
+    return result
 
 
 def initialize(conn):
@@ -92,6 +171,7 @@ def put_setting(conn, key, value):
 
 
 def queue(conn, event, recipient, kind, body, order_id=None, status=None):
+    recipient = evolution.canonical_phone(recipient)
     if not recipient:
         return
     conn.execute('''INSERT OR IGNORE INTO whatsapp_outbox
@@ -103,7 +183,7 @@ def order_notice(conn, order):
     if not config()['ready'] or not order['whatsapp_opt_in']:
         return
     recipient = phone(order['customer_phone'])
-    contact = conn.execute('SELECT * FROM whatsapp_contacts WHERE phone=?', (recipient,)).fetchone()
+    contact = contact_identity(conn, recipient)
     if contact and contact['opted_out']:
         return
     text = f"Sahara: seu pedido #{order['id']} está {LABELS.get(order['status'], order['status'])}."
@@ -118,20 +198,24 @@ def answer(conn, recipient, text):
     normalized = normalize(text)
     now = int(time.time())
     if normalized in ('parar', 'sair', 'stop', 'cancelar avisos'):
-        conn.execute('UPDATE whatsapp_contacts SET opted_out=1 WHERE phone=?', (recipient,))
-        conn.execute("UPDATE whatsapp_outbox SET status='skipped',error='Avisos desativados pelo cliente.',updated_at=? WHERE phone=? AND kind='order' AND status IN ('pending','blocked')", (utcnow(), recipient))
+        update_contact_identity(conn, recipient, 'opted_out', 1)
+        aliases = evolution.phone_aliases(recipient)
+        placeholders = ','.join('?' for _ in aliases)
+        conn.execute(f"UPDATE whatsapp_outbox SET status='skipped',error='Avisos desativados pelo cliente.',updated_at=? WHERE phone IN ({placeholders}) AND kind='order' AND status IN ('pending','blocked')", (utcnow(), *aliases))
         return 'Os avisos automáticos foram desativados. Para voltar a receber, envie ATIVAR AVISOS.'
     if normalized == 'ativar avisos':
-        conn.execute('UPDATE whatsapp_contacts SET opted_out=0 WHERE phone=?', (recipient,))
-        conn.execute("UPDATE orders SET whatsapp_opt_in=1 WHERE (customer_phone=? OR customer_phone=?) AND status NOT IN ('delivered','cancelled')", (recipient, recipient[2:] if recipient.startswith('55') else recipient))
+        update_contact_identity(conn, recipient, 'opted_out', 0)
+        aliases = order_phone_aliases(recipient)
+        placeholders = ','.join('?' for _ in aliases)
+        conn.execute(f"UPDATE orders SET whatsapp_opt_in=1 WHERE customer_phone IN ({placeholders}) AND status NOT IN ('delivered','cancelled')", aliases)
         return 'Avisos dos seus pedidos ativos autorizados. Para desativar, envie PARAR.'
     if normalized in ('5', 'atendente', 'humano') or re.search(r'\b(atendente|humano|reclamacao)\b', normalized):
-        conn.execute('UPDATE whatsapp_contacts SET human_until=? WHERE phone=?', (now + 86400, recipient))
+        update_contact_identity(conn, recipient, 'human_until', now + 86400)
         return 'Sua conversa ficou disponível para a equipe no PDV. O atendimento automático está pausado. Atendemos de segunda a domingo, das 18h às 23h. Para voltar ao menu automático, envie MENU.'
-    contact = conn.execute('SELECT * FROM whatsapp_contacts WHERE phone=?', (recipient,)).fetchone()
+    contact = contact_identity(conn, recipient)
     if normalized == 'menu':
-        conn.execute('UPDATE whatsapp_contacts SET human_until=0 WHERE phone=?', (recipient,))
-    elif contact['human_until'] > now:
+        update_contact_identity(conn, recipient, 'human_until', 0)
+    elif contact and contact['human_until'] > now:
         return None
     if normalized == '3' or re.search(r'\b(horario|abre|fecha|funciona|aberto)\b', normalized):
         return 'Atendemos somente por delivery, de segunda a domingo, das 18h às 23h, no horário de Maringá.'
@@ -140,8 +224,10 @@ def answer(conn, recipient, text):
     if normalized == '2' or re.search(r'\b(status|pedido|solicitacao|andamento)\b', normalized):
         # Nunca confia no número ou ID escritos no texto: a identidade vem do webhook assinado.
         matches = re.findall(r'\b[0-9a-f]{32}\b', normalized)
-        rows = conn.execute('SELECT * FROM orders WHERE customer_phone=? OR customer_phone=? ORDER BY created_at DESC LIMIT 10',
-                            (recipient, recipient[2:] if recipient.startswith('55') else recipient)).fetchall()
+        aliases = order_phone_aliases(recipient)
+        placeholders = ','.join('?' for _ in aliases)
+        rows = conn.execute(f'SELECT * FROM orders WHERE customer_phone IN ({placeholders}) ORDER BY created_at DESC LIMIT 10',
+                            aliases).fetchall()
         order = next((row for row in rows if row['id'] in matches), None) if matches else (rows[0] if rows else None)
         if order:
             return f"Seu pedido #{order['id']} está {LABELS.get(order['status'], order['status'])}. Para dúvidas ou alterações, envie ATENDENTE. Para autorizar avisos de andamento, envie ATIVAR AVISOS."
@@ -201,7 +287,7 @@ async def receive(request: Request):
                         conn.execute('INSERT INTO whatsapp_receipts VALUES(?,?,?) ON CONFLICT(provider_id) DO UPDATE SET status=excluded.status,error=excluded.error', (key, status, error))
                         conn.execute('UPDATE whatsapp_outbox SET status=?,error=?,updated_at=? WHERE provider_id=?', (status, error, utcnow(), key))
                     for message in value.get('messages', []):
-                        recipient, key = phone(message.get('from', '')), message.get('id')
+                        recipient, key = phone(message.get('from', ''), international=True), message.get('id')
                         if not recipient or not isinstance(key, str) or not key or len(key) > 512:
                             continue
                         timestamp = int(message.get('timestamp', 0))
@@ -252,12 +338,18 @@ async def evolution_webhook(request: Request):
             raise HTTPException(403, 'Instância não autorizada.')
         event = body.get('event', '').lower().replace('_', '.')
         data = body.get('data', {})
+        checked_state = None
+        if event == 'connection.update' and isinstance(data, dict) and data.get('state') == 'open':
+            # A signed event still cannot establish which number owns the session.
+            try:
+                checked_state = await asyncio.to_thread(evolution.connection, cfg)
+            except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError, TypeError):
+                checked_state = 'unavailable'
         with db(request) as conn:
             if event == 'connection.update':
                 state = data.get('state')
                 if state in ('open', 'close', 'connecting'):
-                    put_setting(conn, 'evolution_connection', state)
-                    put_setting(conn, 'evolution_connection_at', utcnow())
+                    cache_evolution_connection(conn, cfg, checked_state if state == 'open' else state)
             elif event == 'messages.update':
                 mapping = {'SERVER_ACK': 'sent', 'DELIVERY_ACK': 'delivered', 'READ': 'read',
                            'PLAYED': 'read', 'ERROR': 'failed', 2: 'sent', 3: 'delivered', 4: 'read', 5: 'read', 0: 'failed'}
@@ -309,13 +401,16 @@ def evolution_status(request, cfg):
     try:
         state = evolution.connection(cfg)
         with db(request) as conn:
-            put_setting(conn, 'evolution_connection', state)
-            put_setting(conn, 'evolution_connection_at', utcnow())
-        return {'state': state, 'connected': state == 'open', 'error': ''}
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError):
+            cache_evolution_connection(conn, cfg, state)
+        return {'state': state, 'connected': state == 'open', 'error': (
+            'A instância está conectada a outro número. Conecte o WhatsApp da loja configurado no servidor.'
+            if state == 'wrong_number' else '')}
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError, TypeError) as error:
+        state = 'not_created' if isinstance(error, HTTPError) and error.code == 404 else 'unavailable'
         with db(request) as conn:
-            put_setting(conn, 'evolution_connection', 'unavailable')
-        return {'state': 'unavailable', 'connected': False, 'error': 'Não foi possível consultar a Evolution API. Confira o serviço, a URL e a chave no Render.'}
+            cache_evolution_connection(conn, cfg, state)
+        return {'state': state, 'connected': False, 'error': ('' if state == 'not_created' else
+                'Não foi possível consultar a Evolution API. Confira o serviço, a URL e a chave no Render.')}
 
 
 @router.post('/api/admin/whatsapp/connect', dependencies=[Depends(require_admin)])
@@ -328,20 +423,21 @@ def connect_evolution(request: Request):
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError, TypeError):
         raise HTTPException(502, 'Não foi possível preparar a conexão. Confira a Evolution API e suas credenciais no Render.') from None
     with db(request) as conn:
-        put_setting(conn, 'evolution_connection', result['state'])
-        put_setting(conn, 'evolution_connection_at', utcnow())
+        cache_evolution_connection(conn, cfg, result['state'])
     return result
 
 
 def payload(conn, row, cfg):
-    contact = conn.execute('SELECT * FROM whatsapp_contacts WHERE phone=?', (row['phone'],)).fetchone()
+    contact = contact_identity(conn, row['phone'])
     if row['kind'] == 'order':
-        order = conn.execute('SELECT whatsapp_opt_in FROM orders WHERE id=?', (row['order_id'],)).fetchone()
+        order = conn.execute('SELECT whatsapp_opt_in,status FROM orders WHERE id=?', (row['order_id'],)).fetchone()
         if not order or not order['whatsapp_opt_in'] or (contact and contact['opted_out']):
             return None, 'skipped', 'Avisos não autorizados pelo cliente.'
+        if order['status'] != row['order_status']:
+            return None, 'skipped', 'Etapa superada. O pedido já avançou para outro estado.'
     if cfg['provider'] == 'evolution':
-        return {'number': row['phone'], 'text': row['body'], 'linkPreview': False}, None, None
-    base = {'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': row['phone']}
+        return {'number': evolution.canonical_phone(row['phone']), 'text': row['body'], 'linkPreview': False}, None, None
+    base = {'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': evolution.canonical_phone(row['phone'])}
     if contact and contact['last_inbound'] > int(time.time()) - 86400:
         return base | {'type': 'text', 'text': {'preview_url': False, 'body': row['body']}}, None, None
     if row['kind'] == 'order' and cfg['template']:
@@ -358,7 +454,8 @@ def send(cfg, data):
     request = URLRequest(f"https://graph.facebook.com/{cfg['version']}/{cfg['SAHARA_WHATSAPP_PHONE_NUMBER_ID']}/messages",
                          data=json.dumps(data).encode(), method='POST',
                          headers={'Authorization': 'Bearer ' + cfg['SAHARA_WHATSAPP_ACCESS_TOKEN'], 'Content-Type': 'application/json'})
-    with urlopen(request, timeout=15) as response:
+    # Keep bearer credentials on graph.facebook.com even if the service redirects.
+    with evolution.open_url(request, timeout=15) as response:
         result = json.load(response)
     identifier = result['messages'][0]['id']
     if not isinstance(identifier, str) or not identifier:
@@ -372,8 +469,17 @@ def process_one(app):
         return False
     request = SimpleNamespace(app=app)
     with db(request) as conn:
-        if cfg['provider'] == 'evolution' and setting(conn, 'evolution_connection') != 'open':
-            return False  # Mantém os envios na fila até que a conexão seja confirmada.
+        pending = conn.execute("SELECT 1 FROM whatsapp_outbox WHERE status='pending' AND provider=? AND next_attempt<=? LIMIT 1", (cfg['provider'], int(time.time()))).fetchone()
+        if not pending:
+            return False
+        needs_check = cfg['provider'] == 'evolution' and not verified_evolution_connection(conn, cfg)
+    if needs_check:
+        status = evolution_status(request, cfg)
+        if not status['connected']:
+            return False
+    with db(request) as conn:
+        if cfg['provider'] == 'evolution' and not verified_evolution_connection(conn, cfg):
+            return False  # No envio, exige identidade recente da configuração atual.
         row = conn.execute("SELECT * FROM whatsapp_outbox WHERE status='pending' AND provider=? AND next_attempt<=? ORDER BY created_at,id LIMIT 1", (cfg['provider'], int(time.time()))).fetchone()
         if not row:
             return False
@@ -390,7 +496,7 @@ def process_one(app):
         status = 'pending' if exc.code == 429 and row['attempts'] < 4 else ('uncertain' if exc.code >= 500 else 'failed')
         error = f"{'Evolution API' if cfg['provider'] == 'evolution' else 'Meta'} HTTP {exc.code}. Confira a conexão e a configuração do serviço."
         next_attempt = int(time.time()) + min(60 * 2 ** row['attempts'], 3600)
-    except (URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError):
+    except (URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
         status, error = 'uncertain', 'Envio sem confirmação. Confira a conversa antes de reenviar para evitar duplicidade.'
     with db(request) as conn:
         receipt = conn.execute('SELECT * FROM whatsapp_receipts WHERE provider_id=?', (identifier,)).fetchone() if identifier else None
@@ -441,9 +547,7 @@ def dashboard(request: Request):
                 'last_webhook_at': setting(conn, 'evolution_last_webhook_at' if cfg['provider'] == 'evolution' else 'last_webhook_at'),
                 'missing': [key for key in (evolution.REQUIRED if cfg['provider'] == 'evolution' else REQUIRED) if not cfg[key]],
                 'messages': [dict(row) for row in conn.execute('SELECT id,phone,kind,body,status,error,created_at FROM whatsapp_outbox WHERE provider=? ORDER BY created_at DESC LIMIT 50', (cfg['provider'],))],
-                'conversations': [dict(row) for row in conn.execute('''SELECT c.*,
-                    (SELECT body FROM whatsapp_inbound i WHERE i.phone=c.phone ORDER BY created_at DESC,rowid DESC LIMIT 1) AS last_message
-                    FROM whatsapp_contacts c ORDER BY last_inbound DESC LIMIT 50''')]}
+                'conversations': conversations(conn)}
 
 
 class Reply(BaseModel):
@@ -461,15 +565,15 @@ def manual_reply(body: Reply, request: Request):
     with db(request) as conn:
         previous = conn.execute('SELECT * FROM whatsapp_outbox WHERE event_key=?', ('manual:' + body.idempotency_key,)).fetchone()
         if previous:
-            if previous['phone'] != recipient or previous['body'] != body.message:
+            if evolution.canonical_phone(previous['phone']) != recipient or previous['body'] != body.message:
                 raise HTTPException(409, 'Identificador já usado em outra resposta.')
             return {'queued': True, 'replayed': True}
-        contact = conn.execute('SELECT * FROM whatsapp_contacts WHERE phone=?', (recipient,)).fetchone()
+        contact = contact_identity(conn, recipient)
         if not contact:
             raise HTTPException(409, 'A conversa precisa ter uma mensagem recebida do cliente.')
         if config()['provider'] == 'meta' and contact['last_inbound'] <= int(time.time()) - 86400:
             raise HTTPException(409, 'O cliente precisa enviar uma nova mensagem para abrir a janela de atendimento de 24 horas.')
-        conn.execute('UPDATE whatsapp_contacts SET human_until=? WHERE phone=?', (int(time.time()) + 86400, recipient))
+        update_contact_identity(conn, recipient, 'human_until', int(time.time()) + 86400)
         queue(conn, 'manual:' + body.idempotency_key, recipient, 'manual', body.message)
     return {'queued': True, 'replayed': False}
 
@@ -477,7 +581,7 @@ def manual_reply(body: Reply, request: Request):
 @router.post('/api/admin/whatsapp/conversations/{recipient}/resume', dependencies=[Depends(require_admin)])
 def resume(recipient: str, request: Request):
     with db(request) as conn:
-        if not conn.execute('UPDATE whatsapp_contacts SET human_until=0 WHERE phone=?', (phone(recipient),)).rowcount:
+        if not update_contact_identity(conn, phone(recipient, international=True), 'human_until', 0):
             raise HTTPException(404, 'Conversa não encontrada.')
     return {'ok': True}
 

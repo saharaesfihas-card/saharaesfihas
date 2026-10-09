@@ -5,9 +5,10 @@ O PDV está preparado para conectar ao WhatsApp Business do celular pela
 sem ativar a WhatsApp Cloud API da Meta. O aplicativo continua no celular, e
 você vincula a sessão como um aparelho conectado.
 
-O código não foi publicado nem um número real pareado nesta preparação.
-Conexões não oficiais podem cair ou sofrer bloqueio pelo WhatsApp; o QR Code
-não garante estabilidade nem elimina esse risco.
+O código está salvo no repositório. A ativação no Render e o pareamento do número
+dependem dos passos abaixo. Nenhum número real foi pareado nesta preparação.
+Baileys usa o WhatsApp Web e não é a API oficial da Meta; essa conexão pode exigir
+novo pareamento e manutenção quando o WhatsApp mudar.
 
 ## O que está disponível
 
@@ -37,11 +38,7 @@ O repositório conectado ao Render é:
 
 `https://github.com/saharaesfihas-card/saharaesfihas`
 
-O pacote de atualização inclui a integração completa, inclusive os arquivos da
-preparação anterior. Atualize mantendo as mesmas pastas; preserve os demais
-arquivos, as configurações do PDV, a senha de gestão e o disco de pedidos.
-
-Depois de publicar no repositório, use **Manual Deploy → Deploy latest commit**
+Use **Manual Deploy → Deploy latest commit**
 no serviço `sahara-esfihas-pdv`. A conexão permanece desligada até configurar as
 variáveis abaixo. O banco é atualizado automaticamente, sem apagar os pedidos.
 Pedidos antigos permanecem sem autorização de avisos; não há disparo retroativo.
@@ -55,10 +52,12 @@ privados. Nesse caso, pule para o passo 3.
 Para hospedar no Render, foi preparado **render.evolution.yaml**, um Blueprint
 separado do atual PDV. Ele define:
 
-- Evolution API `evoapicloud/evolution-api:v2.3.7`, versão estável publicada pelo
-  projeto, com 2 GB de RAM e disco persistente de sessão.
-- PostgreSQL para dados e sessão da Evolution API.
-- Key Value compatível com Redis para cache e sessão.
+- Evolution API `evoapicloud/evolution-api:v2.3.7`, com imagem fixada pelo digest
+  verificado no registro oficial, 2 GB de RAM e disco persistente.
+- PostgreSQL para dados e credenciais da sessão da Evolution API, separado do
+  banco de pedidos do PDV.
+- Key Value compatível com Redis para cache. As credenciais da sessão ficam no
+  PostgreSQL, com `CACHE_REDIS_SAVE_INSTANCES=false`.
 
 **Os três recursos e o disco geram custos adicionais.** O Render mostra os
 valores antes da criação; confira-os na conta da Sahara. Nada foi criado durante
@@ -76,6 +75,22 @@ privadamente em **Environment** para a configuração do PDV. Ela não deve ser
 publicada no repositório nem enviada no chat. O PDV gera e exibe o QR Code, portanto
 não é necessário hospedar também o Evolution Manager para esse fluxo.
 
+O Render fornece HTTPS para o serviço. A Evolution escuta internamente na porta
+8080; PostgreSQL e Redis usam conexões privadas e não liberam acesso externo.
+O servidor do PDV envia a chave no cabeçalho `apikey`. O navegador acessa apenas
+o PDV. O Blueprint restringe CORS ao endereço do PDV, desativa o Evolution Manager
+e usa autenticação por chave. A listagem autenticada da Evolution pode conter
+credenciais da instância; o PDV não as envia ao navegador. Mantenha o acesso ao
+painel e aos logs do serviço limitado à equipe: a Evolution 2.3.7 pode registrar
+conteúdo recebido em seus logs, mesmo com `LOG_LEVEL=ERROR,WARN`.
+
+O Blueprint usa a verificação TCP do Render, sem `healthCheckPath` HTTP. Na
+Evolution 2.3.7, CORS restrito recusa requisições sem `Origin`, e a rota `/` também
+consulta a versão do WhatsApp pela internet. Por isso, confirme a prontidão pelo
+PDV, em **Verificar conexão**, depois de as migrações do PostgreSQL terminarem.
+O cliente do PDV envia o `Origin` correspondente a `SAHARA_PUBLIC_URL`; mantenha
+esse endereço igual ao `CORS_ORIGIN` configurado na Evolution.
+
 Se usar outro serviço/provedor, mantenha PostgreSQL, armazenamento da sessão e
 cache conforme a versão instalada. A adaptação foi preparada para Evolution API
 **v2**; Evolution Go e outros produtos têm contratos diferentes.
@@ -91,6 +106,7 @@ No serviço **sahara-esfihas-pdv**, configure:
 | `SAHARA_EVOLUTION_URL` | URL HTTPS do serviço Evolution, sem `/manager`, usuário ou senha na URL |
 | `SAHARA_EVOLUTION_API_KEY` | A chave privada `AUTHENTICATION_API_KEY` do serviço Evolution |
 | `SAHARA_EVOLUTION_INSTANCE` | `sahara` |
+| `SAHARA_EVOLUTION_EXPECTED_NUMBER` | `5544991748318`, número da loja, com país e DDD e somente dígitos |
 | `SAHARA_EVOLUTION_WEBHOOK_SECRET` | Segredo aleatório privado, diferente da chave da API |
 | `SAHARA_PUBLIC_URL` | `https://sahara-esfihas-pdv.onrender.com` |
 
@@ -154,6 +170,14 @@ Ele usa `X-Sahara-Webhook-Secret`, com o segredo privado do Render, e aceita
 somente a instância configurada. `byEvents=false`, `base64=false`, e eventos:
 `MESSAGES_UPSERT`, `MESSAGES_UPDATE`, `CONNECTION_UPDATE`.
 
+O contrato foi conferido no código oficial da versão 2.3.7: o PDV configura
+`POST /webhook/set/sahara` com `{ "webhook": { "enabled": true, "url": "...",
+"headers": { "X-Sahara-Webhook-Secret": "..." }, "byEvents": false,
+"base64": false, "events": ["MESSAGES_UPSERT", "MESSAGES_UPDATE",
+"CONNECTION_UPDATE"] } }`. O envio de texto usa `POST /message/sendText/sahara`
+com `{ "number": "55...", "text": "..." }` e o cabeçalho privado `apikey`.
+Não use chaves reais em exemplos públicos ou comandos compartilhados.
+
 A identidade do cliente vem do endereço telefônico da sessão. IDs `@lid` só
 podem ser usados quando o evento fornece também o endereço telefônico
 `remoteJidAlt`; um LID isolado não é tratado como telefone. A consulta não
@@ -164,8 +188,9 @@ já confirmado de entrega ou leitura.
 ## Fila, reconexão e falhas
 
 A fila fica no disco SQLite privado do PDV. O servidor só consome a fila
-Evolution quando a conexão foi confirmada como `open` por evento autenticado
-ou consulta à API. Enquanto desconectada, as mensagens ficam pendentes.
+Evolution depois de consultar a conexão e confirmar que ela pertence ao número
+da loja. Essa confirmação vale por até 30 segundos e é invalidada quando a
+configuração muda. Enquanto desconectada, as mensagens ficam pendentes.
 Os eventos de pedidos e seus avisos são gravados na mesma transação.
 
 Falhas de rede, respostas ambíguas e reinício durante envio podem deixar um
@@ -174,8 +199,8 @@ nesses casos não há reenvio automático. HTTP 429 tem até cinco tentativas co
 espera crescente. Falhas explícitas têm reenvio manual após corrigir a causa.
 
 `SAHARA_WHATSAPP_ENABLED=0` pausa envios e respostas e não gera novos avisos
-nas mudanças de etapa. A fila existente é preservada. Ao reconectar, revise
-mensagens pendentes para não surpreender clientes com avisos antigos.
+nas mudanças de etapa. A fila existente é preservada. Ao reconectar, avisos de
+etapas já superadas são descartados; o painel preserva esse resultado no histórico.
 
 As mensagens da fila são associadas ao provedor que as criou. Trocar entre Meta
 e Evolution não transfere mensagens pendentes de uma conexão para outra.
@@ -190,15 +215,21 @@ base64. Mensagens maiores exigem revisar o limite antes de uso.
 ```sh
 python -m unittest discover -s server/tests -v
 node tests/admin.spec.cjs
+node tests/evolution-admin.spec.cjs
 node tests/ordering.spec.cjs
 ```
 
 Os testes de transporte e pareamento são simulados, sem número real conectado.
 O Blueprint foi validado com o schema oficial do Render; o serviço não foi
-implantado nesta sessão. A imagem indicada foi confirmada no registro, mas
-não foi executada neste ambiente. Atualizações futuras da Evolution/Baileys ou
-do WhatsApp podem exigir manutenção.
+implantado nesta sessão. A imagem oficial 2.3.7 foi baixada com verificação de
+TLS e digest e executada em contêineres isolados com PostgreSQL 15 e Redis 7.2.
+As migrações concluíram, os testes de chave e CORS passaram e uma instância local
+sem pareamento confirmou o formato de identidade e os cabeçalhos do webhook.
+Essa instância foi excluída depois do teste. Não houve conexão com um número nem
+envio de mensagens. Atualizações futuras da Evolution/Baileys ou do WhatsApp podem
+exigir manutenção.
 
 Referências: [Evolution API](https://github.com/evolution-foundation/evolution-api),
 [versão 2.3.7](https://github.com/evolution-foundation/evolution-api/releases/tag/2.3.7),
+[imagem oficial](https://hub.docker.com/r/evoapicloud/evolution-api),
 [Blueprints do Render](https://render.com/docs/blueprint-spec).

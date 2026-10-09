@@ -5,11 +5,12 @@ services:
     name: sahara-whatsapp-evolution
     runtime: image
     image:
-      url: docker.io/evoapicloud/evolution-api:v2.3.7
+      url: docker.io/evoapicloud/evolution-api:v2.3.7@sha256:1bd8afc4a6cf48822e6cf02469aeae7bd35a12a6b616eacd1291926307f4d339
     plan: 1c-2g
     region: oregon
     numInstances: 1
-    healthCheckPath: /
+    # Sem caminho HTTP: a verificação do Render usa TCP. A API exige Origin
+    # quando CORS é restrito; a rota / também consulta a versão do WhatsApp.
     autoDeployTrigger: 'off'
     disk:
       name: sahara-whatsapp-session
@@ -20,6 +21,8 @@ services:
         value: http
       - key: SERVER_PORT
         value: '8080'
+      - key: SERVER_DISABLE_MANAGER
+        value: 'true'
       - key: SERVER_URL
         fromService:
           name: sahara-whatsapp-evolution
@@ -28,6 +31,13 @@ services:
       - key: AUTHENTICATION_API_KEY
         generateValue: true
       - key: AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES
+        value: 'false'
+      # O navegador usa apenas o PDV; a chave da Evolution fica no servidor.
+      - key: CORS_ORIGIN
+        value: https://sahara-esfihas-pdv.onrender.com
+      - key: CORS_CREDENTIALS
+        value: 'false'
+      - key: TELEMETRY_ENABLED
         value: 'false'
       - key: DATABASE_PROVIDER
         value: postgresql
@@ -51,7 +61,8 @@ services:
       - key: CACHE_REDIS_PREFIX_KEY
         value: sahara-evolution
       - key: CACHE_REDIS_SAVE_INSTANCES
-        value: 'true'
+        # O Redis mantém cache; as credenciais da sessão ficam no PostgreSQL.
+        value: 'false'
       - key: CACHE_LOCAL_ENABLED
         value: 'false'
       - key: WEBHOOK_GLOBAL_ENABLED
