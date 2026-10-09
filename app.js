@@ -47,6 +47,7 @@ function prepareCheckout() {
     customer: {
       name: read('customer-name'), phone: read('customer-phone'),
       marketing_opt_in: document.querySelector('#marketing-opt-in')?.checked || false,
+      whatsapp_opt_in: document.querySelector('#whatsapp-opt-in')?.checked || false,
     },
     fulfillment: delivery ? 'delivery' : 'pickup',
     paymentMethod: form.querySelector('input[name="payment"]:checked')?.value || '',

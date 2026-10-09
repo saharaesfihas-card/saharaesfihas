@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261008-pdv-etapas-v1';
+const CACHE = 'sahara-pwa-20261009-whatsapp-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'address.js', 'ordering.js', 'ordering.css', 'pwa.css', 'pwa.js', 'manifest.webmanifest',

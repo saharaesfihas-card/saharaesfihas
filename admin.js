@@ -392,7 +392,7 @@
     const { form, grid } = createForm('Registrar pedido', async data => {
       const items = quantityInputs.map(([product, input]) => ({ id: product.id, quantity: Number(input.value) })).filter(item => item.quantity > 0);
       if (!items.length) throw new Error('Adicione ao menos um produto ao pedido.');
-      const payload = { items, customer: { name: get(data, 'name'), phone: get(data, 'phone'), marketing_opt_in: false }, delivery: { street: get(data, 'street'), number: get(data, 'number'), neighborhood: get(data, 'neighborhood'), complement: get(data, 'complement'), location: null }, payment_method: get(data, 'payment_method'), notes: get(data, 'notes'), requested_for: null, coupon_code: get(data, 'coupon_code') || null };
+      const payload = { items, customer: { name: get(data, 'name'), phone: get(data, 'phone'), marketing_opt_in: false, whatsapp_opt_in: data.has('whatsapp_opt_in') }, delivery: { street: get(data, 'street'), number: get(data, 'number'), neighborhood: get(data, 'neighborhood'), complement: get(data, 'complement'), location: null }, payment_method: get(data, 'payment_method'), notes: get(data, 'notes'), requested_for: null, coupon_code: get(data, 'coupon_code') || null };
       const fingerprint = JSON.stringify(payload);
       if (orderFingerprint && orderFingerprint !== fingerprint) idempotencyKey = crypto.randomUUID();
       orderFingerprint = fingerprint;
@@ -418,6 +418,7 @@
     const customerFields = section('Dados do cliente', 'person', 'rose');
     field(customerFields, 'name', 'Nome do cliente', { required: true, maxLength: 100, placeholder: 'Nome de quem vai receber' });
     field(customerFields, 'phone', 'Telefone do cliente', { type: 'tel', required: true, maxLength: 25, placeholder: '(44) 99999-9999' });
+    field(customerFields, 'whatsapp_opt_in', 'O cliente autorizou avisos deste pedido pelo WhatsApp.', { type: 'checkbox', wide: true });
     const addressFields = section('Endereço de entrega', 'geo-alt', 'purple');
     field(addressFields, 'street', 'Rua', { required: true, maxLength: 160 });
     field(addressFields, 'number', 'Número', { required: true, maxLength: 20 });
@@ -662,6 +663,46 @@
       item.append(heading, el('p', integration.reason || 'Consulte a configuração do serviço.')); p.append(item);
     }
     screen.append(p);
+    await loadWhatsApp(screen);
+  }
+
+  async function loadWhatsApp(screen) {
+    const data = await api('/admin/whatsapp');
+    const setup = panel('WhatsApp da Sahara', 'Atendimento automático, consulta de pedidos e avisos de andamento. Novos pedidos são finalizados no cardápio e registrados no PDV.');
+    setup.append(el('p', data.configured ? 'Configuração presente no servidor. A confirmação de envio aparece no histórico abaixo.' : 'Ativação pendente: conecte o número à API oficial da Meta e configure as credenciais no Render.'));
+    setup.append(el('p', `Verificação do webhook: ${data.webhook_verified_at ? date(data.webhook_verified_at) : 'pendente'}`));
+    setup.append(el('p', `Último evento recebido: ${data.last_webhook_at ? date(data.last_webhook_at) : 'nenhum'}`));
+    setup.append(el('p', data.template_configured ? 'Modelo de avisos configurado. A Meta precisa aprová-lo antes do uso.' : 'Sem modelo de avisos: fora das 24 horas após a mensagem do cliente, os avisos ficam bloqueados.'));
+    screen.append(setup);
+    const conversations = list(data, 'conversations');
+    const inbox = panel('Atendimento pelo WhatsApp', 'O cliente pode pedir um atendente. Ao responder por aqui, o robô fica pausado para essa conversa por 24 horas. O cliente pode retornar enviando MENU.');
+    inbox.append(table('Conversas do WhatsApp', [['Número', row => row.phone], ['Última mensagem', row => row.last_message], ['Atendimento', row => row.human_until > Date.now() / 1000 ? 'Com a equipe' : 'Automático'], ['Avisos', row => row.opted_out ? 'Desativados' : 'Permitidos quando autorizados'], ['Ação', row => {
+      const control = button('Retomar robô', async () => { await saved(`/admin/whatsapp/conversations/${encodeURIComponent(row.phone)}/resume`, {}, 'Atendimento automático retomado.'); });
+      control.disabled = row.human_until <= Date.now() / 1000; return control;
+    }]], conversations, 'Nenhuma conversa recebida. Após a ativação, envie uma mensagem ao WhatsApp da loja.'));
+    if (data.configured && conversations.length) {
+      let attempt = null;
+      const f = createForm('Enviar resposta', async values => {
+        const payload = { phone: get(values, 'whatsapp_phone'), message: get(values, 'whatsapp_message') };
+        const fingerprint = JSON.stringify(payload);
+        if (!attempt || attempt.fingerprint !== fingerprint) attempt = { fingerprint, key: crypto.randomUUID() };
+        await saved('/admin/whatsapp/reply', { ...payload, idempotency_key: attempt.key }, 'Resposta colocada na fila. Confira o envio no histórico.');
+      }, 'Respostas livres exigem mensagem do cliente nas últimas 24 horas.');
+      field(f.grid, 'whatsapp_phone', 'Conversa', { type: 'select', choices: conversations.map(row => [row.phone, row.phone]) });
+      field(f.grid, 'whatsapp_message', 'Sua resposta', { type: 'textarea', wide: true, required: true, maxLength: 4096 });
+      inbox.append(f.form);
+    }
+    screen.append(inbox);
+    const labels = { pending: 'Na fila', sending: 'Enviando', accepted: 'Aceita pela Meta', sent: 'Enviada', delivered: 'Entregue', read: 'Lida', failed: 'Falhou', blocked: 'Bloqueada', uncertain: 'Sem confirmação', skipped: 'Não enviada' };
+    const history = panel('Histórico de mensagens', '“Aceita pela Meta” indica recebimento pela API. A entrega e a leitura dependem das confirmações do WhatsApp. Use Atualizar dados para consultar novas mensagens.');
+    history.append(table('Envios do WhatsApp', [['Data', row => date(row.created_at)], ['Número', row => row.phone], ['Mensagem', row => row.body], ['Situação', row => labels[row.status] || row.status], ['Detalhe', row => row.error || '—'], ['Ação', row => {
+      if (!data.configured || !['failed', 'blocked'].includes(row.status)) return '—';
+      return button('Tentar novamente', async () => {
+        if (!window.confirm('Reenviar esta mensagem após corrigir a causa da falha?')) return;
+        await saved(`/admin/whatsapp/messages/${encodeURIComponent(row.id)}/retry`, {}, 'Mensagem colocada novamente na fila.');
+      });
+    }]], list(data, 'messages'), 'Nenhuma mensagem na fila.'));
+    screen.append(history);
   }
 
   const loaders = { orders: loadOrders, pos: loadPos, dashboard: loadDashboard, inventory: loadInventory, cash: loadCash, receivables: loadReceivables, customers: loadCustomers, coupons: loadCoupons, loyalty: loadLoyalty, campaigns: loadCampaigns, drivers: loadDrivers, reviews: loadReviews, integrations: loadIntegrations };

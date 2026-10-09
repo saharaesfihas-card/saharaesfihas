@@ -76,3 +76,7 @@ Configure o proxy para preservar o `Host` público e enviar `X-Forwarded-Proto: 
 Publique a aplicação na raiz do domínio. Caminhos como `/loja/` exigem alterações nos caminhos da API, no cookie e no aplicativo. Mantenha `SAHARA_COOKIE_SECURE=1` em produção. Sem HTTPS, o navegador não envia o cookie seguro e o login não permanece ativo.
 
 Os detalhes de operação, integrações e testes estão em [SISTEMA.md](SISTEMA.md).
+
+Para configurar atendimento automático e avisos de pedidos pela API oficial do
+WhatsApp no Render, siga [WHATSAPP.md](WHATSAPP.md). As credenciais ficam nas
+variáveis privadas do serviço; o uso apenas do aplicativo no celular não ativa a API.

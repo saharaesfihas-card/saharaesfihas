@@ -13,9 +13,14 @@
     <input id="customer-name" name="customer-name" type="text" autocomplete="name" maxlength="100">
     <label for="customer-phone">Telefone com DDD</label>
     <input id="customer-phone" name="customer-phone" type="tel" autocomplete="tel" inputmode="tel" maxlength="24" placeholder="Ex.: (44) 99999-9999">
+    <label class="ordering-consent" for="whatsapp-opt-in"><input id="whatsapp-opt-in" name="whatsapp-opt-in" type="checkbox"><span>Quero receber avisos deste pedido no WhatsApp (opcional).</span></label>
     <label class="ordering-consent" for="marketing-opt-in"><input id="marketing-opt-in" name="marketing-opt-in" type="checkbox"><span>Quero receber ofertas da Sahara no WhatsApp (opcional).</span></label>
-    <p class="ordering-note">O pedido funciona sem criar uma conta. A preferência por ofertas não envia mensagens automaticamente.</p>`;
+    <p class="ordering-note">O pedido funciona sem criar uma conta. Os avisos dependem da conexão da loja com o WhatsApp. Para interrompê-los, envie PARAR. A autorização para ofertas é separada.</p>`;
   form.insertBefore(contactSection, payment);
+  const whatsappConsent = contactSection.querySelector('#whatsapp-opt-in');
+  whatsappConsent.addEventListener('change', () => {
+    contactSection.querySelector('#customer-phone').required = whatsappConsent.checked;
+  });
 
   const status = document.createElement('p');
   status.id = 'order-status';

@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, model_validator
 
-from . import core
+from . import core, whatsapp
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
 
 class Model(BaseModel):
@@ -29,6 +29,7 @@ class Customer(Model):
     name: str = Field(default='', max_length=100)
     phone: str = Field(default='', max_length=30)
     marketing_opt_in: bool = False
+    whatsapp_opt_in: bool = False
 
     @model_validator(mode='after')
     def phone_number(self):
@@ -38,6 +39,8 @@ class Customer(Model):
             self.phone = ''.join(c for c in self.phone if c.isdigit())
             if not 10 <= len(self.phone) <= 15:
                 raise ValueError('Informe um telefone com DDD.')
+        if self.whatsapp_opt_in and not self.phone:
+            raise ValueError('Informe seu número de WhatsApp para receber avisos do pedido.')
         return self
 
 class Location(Model):
@@ -113,7 +116,8 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         raise ValueError('Guarde o banco e os dados privados fora do diretório publicado do site.')
     data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     db_path = data_dir / 'sahara.sqlite3'
-    app = FastAPI(title='Sahara · Gestão delivery', docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title='Sahara · Gestão delivery', docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=whatsapp.lifespan)
     app.state.db_path = db_path
     app.state.admin_password_hash = admin_password_hash if admin_password_hash is not None else os.environ.get('SAHARA_ADMIN_PASSWORD_HASH', '')
     app.state.secure_cookie = secure_cookie if secure_cookie is not None else os.environ.get('SAHARA_COOKIE_SECURE', '1') != '0'
@@ -125,6 +129,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         conn.executescript(core.SCHEMA)
         operations.initialize(conn)
         marketing.initialize(conn)
+        whatsapp.initialize(conn)
         for product in catalog:
             conn.execute('INSERT INTO products(id,name,category,price_cents) VALUES(?,?,?,?) '
                          'ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,price_cents=excluded.price_cents',
@@ -166,7 +171,6 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     @app.get('/api/integrations')
     def integrations():
         entries = [
-            ('whatsapp', 'Chatbot e campanhas no WhatsApp', 'Conectar WhatsApp Business Platform, número habilitado e webhooks.'),
             ('ai', 'Atendimento com inteligência artificial', 'Conectar um provedor de IA e o canal de atendimento.'),
             ('payments', 'Pagamento online com cartão e Pix', 'Conectar provedor de pagamentos e confirmação por webhook.'),
             ('fiscal', 'Emissão de notas fiscais', 'Configurar dados fiscais e um emissor autorizado.'),
@@ -176,7 +180,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             ('printers', 'Impressão automática em múltiplas impressoras', 'Conectar as impressoras e uma ponte local de impressão. A comanda pode ser impressa pelo navegador.'),
             ('recovery', 'Recuperação automática de carrinho', 'Conectar mensagens oficiais e identificação consentida de clientes.')
         ]
-        return {'integrations': [{'id': key, 'label': label, 'available': False, 'reason': reason} for key, label, reason in entries]}
+        return {'integrations': [whatsapp.availability()] + [{'id': key, 'label': label, 'available': False, 'reason': reason} for key, label, reason in entries]}
 
     @app.post('/api/admin/login')
     def login(body: Login, request: Request, response: Response):
@@ -218,6 +222,9 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
 
     def register_order(body, request, source='web'):
         raw = body.model_dump(mode='json')
+        # Preserva os identificadores de tentativas anteriores à integração.
+        if not raw['customer']['whatsapp_opt_in']:
+            raw['customer'].pop('whatsapp_opt_in')
         fingerprint = hashlib.sha256(json.dumps(raw, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         with db(request) as conn:
             existing = conn.execute('SELECT * FROM orders WHERE idempotency_key=?', (body.idempotency_key,)).fetchone()
@@ -269,6 +276,8 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             conn.execute('UPDATE orders SET stock_applied=1,confirmed_at=? WHERE id=?', (utcnow(), order_id))
             conn.execute('INSERT INTO analytics_events VALUES(?,?)', ('order_registered', utcnow()))
             conn.execute('INSERT INTO order_events VALUES(?,?,?,?)', (uuid.uuid4().hex, order_id, 'preparing', utcnow()))
+            conn.execute('UPDATE orders SET whatsapp_opt_in=? WHERE id=?', (int(body.customer.whatsapp_opt_in), order_id))
+            whatsapp.order_notice(conn, conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone())
             return {'id': order_id, 'status': 'preparing', 'total_cents': subtotal - discount, 'tracking_token': tracking,
                     'tracking_url': None, 'replayed': False}
 
@@ -319,6 +328,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             conn.execute('INSERT INTO order_events VALUES(?,?,?,?)', (uuid.uuid4().hex, order_id, body.status, utcnow()))
             fresh = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
             marketing.apply_loyalty(conn, fresh)
+            whatsapp.order_notice(conn, fresh)
             return {'order': order_dict(conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone())}
 
     @app.post('/api/admin/orders/{order_id}/payment')
@@ -353,6 +363,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
 
     app.include_router(operations.router)
     app.include_router(marketing.router)
+    app.include_router(whatsapp.router)
 
     @app.get('/system-config.js')
     def system_config():
