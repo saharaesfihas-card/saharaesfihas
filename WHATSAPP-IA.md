@@ -100,6 +100,17 @@ A verificação real exige ativação pelo proprietário e uma mensagem de teste
 
 ## Se receber apenas o menu básico
 
+Em **Integrações → Inteligência artificial no WhatsApp**, o botão **Testar resposta
+da IA** consulta o Gemini com uma pergunta fixa sobre sugestões e preços, mostrando
+a resposta montada pelo PDV ou o motivo da falha. Não envia WhatsApp, não usa dados
+de clientes e não cria pedidos ou conversas. Consome uma consulta da cota local e
+da cota do provedor, com até 3 testes por dia e 30 segundos entre testes. A cota
+local diária é compartilhada com o atendimento dos clientes. Uma chave de
+idempotência evita repetir geração ao consultar novamente um teste interrompido.
+Testes interrompidos por reinício são registrados sem nova chamada automática.
+Um teste aprovado valida a geração e a interpretação da pergunta, mas o envio
+real ao WhatsApp deve ser confirmado no histórico e pelo destinatário.
+
 No PDV, abra **Integrações → Inteligência artificial no WhatsApp → Verificar IA**.
 O botão fica no início da tela, inclusive quando a IA ainda não está configurada
 ou a conexão com a Evolution não pode ser consultada. O servidor

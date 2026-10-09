@@ -333,6 +333,104 @@ class DeliveryAITests(unittest.TestCase):
         response = self.client.post('/api/admin/login', json={'password': 'test-only-password'})
         return {'X-Sahara-CSRF': response.json()['csrf_token']}
 
+    def test_generation_probe_requires_session_csrf_and_bounded_identifier(self):
+        endpoint = '/api/admin/whatsapp/ai/test'
+        with patch.object(ai, 'interpret') as model:
+            self.assertEqual(self.client.post(endpoint, json={'idempotency_key': uuid4().hex}).status_code, 401)
+            headers = self.login()
+            self.assertEqual(self.client.post(endpoint, json={'idempotency_key': uuid4().hex}).status_code, 403)
+            for body in [{}, {'idempotency_key': 'short'}, {'idempotency_key': 'x' * 129}, {'idempotency_key': uuid4().hex, 'message': 'outside test'}, {'idempotency_key': 'bad/key' * 3}]:
+                self.assertEqual(self.client.post(endpoint, json=body, headers=headers).status_code, 422)
+            model.assert_not_called()
+
+    def test_generation_probe_returns_live_prices_without_whatsapp_contacts_or_orders_and_deduplicates(self):
+        headers = self.login(); key = uuid4().hex
+        def interpret(text, products, cfg):
+            self.assertEqual(text, 'Quais esfihas salgadas você sugere e quanto custam?')
+            with db(self.request) as conn:
+                conn.execute("UPDATE products SET price_cents=450 WHERE id='carne'")
+            return {'intent': 'products', 'product_ids': ['carne']}
+        with patch.object(ai, 'interpret', side_effect=interpret) as model:
+            response = self.client.post('/api/admin/whatsapp/ai/test', json={'idempotency_key': key}, headers=headers)
+            repeat = self.client.post('/api/admin/whatsapp/ai/test', json={'idempotency_key': key}, headers=headers)
+            model.assert_called_once()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['state'], 'generated')
+        self.assertIn('R$ 4,50', response.json()['reply'])
+        self.assertEqual(repeat.json(), response.json())
+        for table in ['whatsapp_inbound', 'whatsapp_outbox', 'whatsapp_contacts', 'orders', 'whatsapp_ai_usage', 'whatsapp_ai_jobs']:
+            self.assertEqual(self.rows(table), [])
+        self.assertEqual(self.client.get('/api/admin/whatsapp').json()['ai']['used_today'], 1)
+
+    def test_generation_probe_reports_generation_quota_even_when_metadata_is_available(self):
+        headers = self.login()
+        metadata = {'name': 'models/' + ai.MODEL, 'supportedGenerationMethods': ['generateContent']}
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(metadata).encode())):
+            self.assertEqual(ai.check_configuration(self.request)['state'], 'available')
+        error = HTTPError('https://provider.example', 429, 'private-key', {}, io.BytesIO(b'{"error":{"message":"private-key"}}'))
+        with patch.object(evolution, 'open_url', side_effect=error) as transport:
+            response = self.client.post('/api/admin/whatsapp/ai/test', json={'idempotency_key': uuid4().hex}, headers=headers)
+            transport.assert_called_once()
+        self.assertEqual(response.json()['state'], 'quota')
+        self.assertNotIn('private-key', response.text)
+        self.assertNotIn('reply', response.json())
+        self.assertEqual(self.rows('whatsapp_outbox'), [])
+
+    def test_probe_limits_are_shared_with_customer_quota_and_never_call_when_disabled(self):
+        with patch.dict(os.environ, {'SAHARA_AI_ENABLED': '0'}), patch.object(ai, 'interpret') as model:
+            self.assertEqual(ai.test_generation(self.request, uuid4().hex)['state'], 'disabled')
+            model.assert_not_called()
+        with patch.dict(os.environ, {'SAHARA_AI_DAILY_LIMIT': '1'}), patch.object(ai, 'interpret', return_value={'intent': 'products', 'product_ids': ['carne']}) as model:
+            self.assertEqual(ai.test_generation(self.request, uuid4().hex)['state'], 'generated')
+            self.assertEqual(ai.test_generation(self.request, uuid4().hex)['state'], 'limit')
+            self.inbound(); ai.process_one(self.app)
+            model.assert_called_once()
+        self.assertEqual(self.rows('whatsapp_ai_jobs')[0]['reason'], 'limit')
+
+    def test_probe_has_daily_and_cooldown_limits_and_does_not_repeat_inflight_or_restarted_calls(self):
+        with patch.object(ai, 'interpret', return_value={'intent': 'products', 'product_ids': ['carne']}) as model:
+            ai.test_generation(self.request, uuid4().hex)
+            self.assertEqual(ai.test_generation(self.request, uuid4().hex)['state'], 'probe_wait')
+            for index in range(2):
+                with db(self.request) as conn:
+                    conn.execute('UPDATE whatsapp_ai_probes SET timestamp=?', (int(time.time()) - 60,))
+                self.assertEqual(ai.test_generation(self.request, uuid4().hex)['state'], 'generated')
+            self.assertEqual(ai.test_generation(self.request, uuid4().hex)['state'], 'probe_limit')
+            self.assertEqual(model.call_count, 3)
+            key = uuid4().hex
+            with db(self.request) as conn:
+                conn.execute('INSERT INTO whatsapp_ai_probes(id,day,timestamp) VALUES(?,?,?)', (key, ai.day(), int(time.time())))
+            self.assertEqual(ai.test_generation(self.request, key)['state'], 'processing')
+            with db(self.request) as conn:
+                ai.recover(conn)
+            self.assertEqual(ai.test_generation(self.request, key)['state'], 'restart')
+            self.assertEqual(model.call_count, 3)
+
+    def test_probe_detects_unrecognized_intent_without_handoff_or_customer_mutations(self):
+        with patch.object(ai, 'interpret', return_value={'intent': 'handoff', 'product_ids': []}):
+            result = ai.test_generation(self.request, uuid4().hex)
+        self.assertEqual(result['state'], 'interpretation')
+        self.assertEqual(self.rows('whatsapp_contacts'), [])
+        self.assertEqual(self.rows('whatsapp_outbox'), [])
+
+    def test_concurrent_probe_requests_cannot_generate_twice_for_the_same_identifier(self):
+        key = uuid4().hex; entered = threading.Event(); release = threading.Event()
+        def interpret(*args):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return {'intent': 'products', 'product_ids': ['carne']}
+        with patch.object(ai, 'interpret', side_effect=interpret) as model, ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(ai.test_generation, self.request, key)
+            try:
+                self.assertTrue(entered.wait(3))
+                second = pool.submit(ai.test_generation, self.request, key)
+                self.assertEqual(second.result(timeout=2)['state'], 'processing')
+            finally:
+                release.set()
+            self.assertEqual(first.result(timeout=3)['state'], 'generated')
+            model.assert_called_once()
+        self.assertEqual(len(self.rows('whatsapp_ai_probes')), 1)
+
     def test_configuration_check_is_private_csrf_protected_and_does_not_generate_or_send(self):
         with patch.object(evolution, 'open_url') as transport:
             self.assertEqual(self.client.post('/api/admin/whatsapp/ai/check', json={}).status_code, 401)

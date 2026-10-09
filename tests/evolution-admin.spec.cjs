@@ -23,6 +23,7 @@ let dashboard = structuredClone(fixture), dashboardWait, dashboardError, connect
 const requests = [], errors = [], external = [];
 let checks = 0;
 let aiCheck = { state: 'available', message: 'Chave e modelo acessíveis. Envie uma pergunta para confirmar uma resposta real da IA.' };
+let aiTest = { state: 'generated', message: 'O Gemini interpretou a pergunta. O PDV montou esta resposta com o cardápio.', reply: '• Carne — R$ 4,00' }, aiTestError;
 
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
 async function render(waitWhatsApp = true) {
@@ -90,6 +91,11 @@ async function start() {
     if (method !== 'GET') assert.equal(request.headers()['x-sahara-csrf'], csrf, `${endpoint} must use the authenticated CSRF token`);
     if (endpoint === '/api/admin/whatsapp/ai/check') {
       assert.equal(method, 'POST'); assert.deepEqual(data, {}); return reply(aiCheck);
+    }
+    if (endpoint === '/api/admin/whatsapp/ai/test') {
+      assert.equal(method, 'POST'); assert.deepEqual(Object.keys(data), ['idempotency_key']);
+      assert.match(data.idempotency_key, /^[0-9a-f-]{36}$/);
+      return aiTestError ? reply({ detail: aiTestError }, 503) : reply(aiTest);
     }
     if (endpoint === '/api/admin/whatsapp/connect') {
       assert.equal(method, 'POST'); assert.deepEqual(data, {});
@@ -251,6 +257,26 @@ async function run() {
     assert.equal(await page.locator('#screen input[type="password"]').count(), 0);
     dashboard = { ...structuredClone(fixture), configured: true, enabled: true, missing: [], connection: { state: 'close', connected: false, error: '' } };
     await render();
+  });
+  await check('Explicit generation preview shows a reply or quota failure and preserves its key after interruption', async () => {
+    await render();
+    assert.equal(requests.some(request => request.endpoint === '/api/admin/whatsapp/ai/test'), false);
+    await page.getByText(/Este teste usa uma consulta da cota do Gemini/).waitFor();
+    await page.getByRole('button', { name: 'Testar resposta da IA', exact: true }).click();
+    await page.getByText(aiTest.message, { exact: true }).waitFor();
+    await page.getByText(aiTest.reply, { exact: true }).waitFor();
+    aiTestError = 'O servidor demorou para responder. Consulte o mesmo teste novamente.';
+    await page.getByRole('button', { name: 'Testar resposta da IA', exact: true }).click();
+    await page.getByText(aiTestError, { exact: true }).first().waitFor();
+    assert.equal(await page.getByText(aiTest.reply, { exact: true }).count(), 0);
+    const interruptedKey = requests.filter(request => request.endpoint === '/api/admin/whatsapp/ai/test').at(-1).data.idempotency_key;
+    aiTestError = null;
+    aiTest = { state: 'quota', message: 'O Google recusou a consulta por limite de cota. Confira a cota gratuita no Google AI Studio e aguarde a liberação; o atendimento básico continua.' };
+    await page.getByRole('button', { name: 'Testar resposta da IA', exact: true }).click();
+    await page.getByText(aiTest.message, { exact: true }).waitFor();
+    assert.equal(requests.filter(request => request.endpoint === '/api/admin/whatsapp/ai/test').at(-1).data.idempotency_key, interruptedKey);
+    assert.equal(await page.getByText('• Carne — R$ 4,00', { exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Testar resposta da IA', exact: true }).isEnabled(), true);
   });
   await check('AI verification remains visible when the WhatsApp dashboard has no AI status', async () => {
     const savedAI = dashboard.ai;

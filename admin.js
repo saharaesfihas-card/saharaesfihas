@@ -689,6 +689,18 @@
       try { const result = await api('/admin/whatsapp/ai/check', { method: 'POST', body: {} }); aiCheck.textContent = result.message; }
       catch (error) { aiCheck.textContent = error.message; throw error; }
     }), aiCheck, el('p', 'Esta verificação consulta apenas a configuração do modelo. Não gera conteúdo nem envia mensagens no WhatsApp.', 'help'));
+    const preview = el('p', 'Teste a pergunta: “Quais esfihas salgadas você sugere e quanto custam?”.', 'help');
+    preview.setAttribute('role', 'status'); preview.setAttribute('aria-live', 'polite');
+    const reply = el('p', '', 'help'); reply.style.whiteSpace = 'pre-wrap';
+    let testKey = crypto.randomUUID();
+    aiPanel.append(button('Testar resposta da IA', async () => {
+      preview.textContent = 'Consultando o Gemini para gerar a resposta de teste…'; reply.textContent = '';
+      try {
+        const result = await api('/admin/whatsapp/ai/test', { method: 'POST', body: { idempotency_key: testKey } });
+        preview.textContent = result.message; reply.textContent = result.reply || '';
+        if (result.state !== 'processing') testKey = crypto.randomUUID();
+      } catch (error) { preview.textContent = error.message; throw error; }
+    }), preview, reply, el('p', 'Este teste usa uma consulta da cota do Gemini, com até 3 testes por dia. Não envia mensagens no WhatsApp. Se a conexão interromper, tocar novamente consulta o mesmo teste.', 'help'));
     screen.append(aiPanel, p, section);
     void loadWhatsAppSection(section, generation);
   }

@@ -31,6 +31,9 @@ DIAGNOSTICS = {
     'missing_key': 'Falta SAHARA_AI_API_KEY no serviço do PDV. Use a chave gerada pelo Google AI Studio.',
     'limit': 'Limite local de IA atingido. O atendimento básico continua funcionando.',
     'restart': 'O servidor reiniciou durante a consulta. O atendimento básico foi utilizado sem repetir a chamada.',
+    'probe_limit': 'Limite de 3 testes de geração por dia atingido. O atendimento dos clientes continua disponível dentro da cota da loja.',
+    'probe_wait': 'Aguarde 30 segundos antes de fazer outro teste de geração.',
+    'interpretation': 'O Gemini respondeu, mas não identificou a pergunta de sugestões como produtos do cardápio.',
 }
 
 
@@ -132,12 +135,65 @@ def initialize(conn):
         day TEXT NOT NULL, timestamp INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS whatsapp_ai_day ON whatsapp_ai_usage(day);
+      CREATE TABLE IF NOT EXISTS whatsapp_ai_probes (
+        id TEXT PRIMARY KEY, day TEXT NOT NULL, timestamp INTEGER NOT NULL,
+        result_json TEXT NOT NULL DEFAULT ''
+      );
     ''')
 
 
 def recover(conn):
     # A request may already have consumed quota. Never repeat it after a restart.
     conn.execute("UPDATE whatsapp_ai_jobs SET status='recovering' WHERE status='processing'")
+    conn.execute("UPDATE whatsapp_ai_probes SET result_json=? WHERE result_json=''",
+                 (json.dumps({'state': 'restart', 'message': 'O servidor reiniciou durante o teste. A consulta não foi repetida.', 'checked_at': utcnow()}),))
+
+
+def used_today(conn):
+    return (conn.execute('SELECT COUNT(*) FROM whatsapp_ai_usage WHERE day=?', (day(),)).fetchone()[0]
+            + conn.execute('SELECT COUNT(*) FROM whatsapp_ai_probes WHERE day=?', (day(),)).fetchone()[0])
+
+
+def test_generation(request, identifier):
+    """Owner-triggered, quota-bounded preview; never creates a WhatsApp message."""
+    cfg = config()
+    now = int(time.time())
+    with db(request) as conn:
+        saved = conn.execute('SELECT result_json FROM whatsapp_ai_probes WHERE id=?', (identifier,)).fetchone()
+        if saved:
+            return json.loads(saved['result_json']) if saved['result_json'] else {'state': 'processing', 'message': 'Este teste ainda está em andamento. Aguarde e consulte novamente.', 'checked_at': utcnow()}
+        probes = conn.execute('SELECT COUNT(*),MAX(timestamp) FROM whatsapp_ai_probes WHERE day=?', (day(),)).fetchone()
+        reason = ('disabled' if not cfg['enabled'] else 'missing_key' if not cfg['key'] else
+                  'limit' if used_today(conn) >= cfg['limit'] else 'probe_limit' if probes[0] >= 3 else
+                  'probe_wait' if probes[1] is not None and now - probes[1] < 30 else '')
+        if reason:
+            return {'state': reason, 'message': DIAGNOSTICS[reason], 'checked_at': utcnow()}
+        conn.execute('INSERT INTO whatsapp_ai_probes(id,day,timestamp) VALUES(?,?,?)', (identifier, day(), now))
+        products = [dict(row) for row in conn.execute('SELECT id,name,category,price_cents FROM products ORDER BY id')]
+    result, reason = None, ''
+    try:
+        result = interpret('Quais esfihas salgadas você sugere e quanto custam?', products, cfg)
+        if result['intent'] != 'products':
+            reason = 'interpretation'
+    except ProviderError as error:
+        reason = error.reason
+    except HTTPError as error:
+        reason = http_reason(error)
+    except (URLError, TimeoutError, OSError):
+        reason = 'network'
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError, RecursionError):
+        reason = 'invalid_response'
+    with db(request) as conn:
+        messages = {'invalid_response': 'O Gemini não retornou uma resposta completa e válida para o teste.',
+                    'provider': 'O Gemini está indisponível para gerar a resposta de teste.'}
+        response = {'state': reason or 'generated', 'message': messages.get(reason, DIAGNOSTICS.get(reason)) if reason else 'O Gemini interpretou a pergunta. O PDV montou esta resposta com o cardápio.', 'checked_at': utcnow()}
+        if not reason:
+            try:
+                response['reply'] = render(conn, '', result)
+            except (ValueError, TypeError, KeyError):
+                response = {'state': 'invalid_response', 'message': messages['invalid_response'], 'checked_at': utcnow()}
+        conn.execute('UPDATE whatsapp_ai_probes SET result_json=? WHERE id=?', (json.dumps(response), identifier))
+    return response
 
 
 def enqueue(conn, identifier, recipient, provider):
@@ -147,7 +203,7 @@ def enqueue(conn, identifier, recipient, provider):
 
 def dashboard(conn):
     cfg = config()
-    used = conn.execute('SELECT COUNT(*) FROM whatsapp_ai_usage WHERE day=?', (day(),)).fetchone()[0]
+    used = used_today(conn)
     last = conn.execute('SELECT status,reason,updated_at FROM whatsapp_ai_jobs ORDER BY updated_at DESC,id DESC LIMIT 1').fetchone()
     from . import whatsapp
     try:
@@ -240,7 +296,7 @@ def process_one(app):
             conn.execute("UPDATE whatsapp_ai_jobs SET status='skipped',reason=?,updated_at=? WHERE id=?", ('stale' if stale else 'human_or_provider', utcnow(), job['id']))
             return True
         reason = 'restart' if job['status'] == 'recovering' else 'disabled' if not cfg['ready'] else ''
-        used = conn.execute('SELECT COUNT(*) FROM whatsapp_ai_usage WHERE day=?', (day(),)).fetchone()[0]
+        used = used_today(conn)
         recent = conn.execute('SELECT COUNT(*),MAX(timestamp) FROM whatsapp_ai_usage WHERE phone=? AND timestamp>?', (job['phone'], now - 86400)).fetchone()
         if not reason and (used >= cfg['limit'] or recent[0] >= 10 or (recent[1] is not None and now - recent[1] < 30)):
             reason = 'limit'

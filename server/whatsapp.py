@@ -439,6 +439,16 @@ def check_ai(request: Request):
     return whatsapp_ai.check_configuration(request)
 
 
+class AITest(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    idempotency_key: str = Field(min_length=16, max_length=128, pattern=r'^[a-zA-Z0-9_-]+$')
+
+
+@router.post('/api/admin/whatsapp/ai/test', dependencies=[Depends(require_admin)])
+def test_ai(body: AITest, request: Request):
+    return whatsapp_ai.test_generation(request, body.idempotency_key)
+
+
 @router.post('/api/admin/whatsapp/connect', dependencies=[Depends(require_admin)])
 def connect_evolution(request: Request):
     cfg = config()
