@@ -77,6 +77,6 @@ Publique a aplicação na raiz do domínio. Caminhos como `/loja/` exigem altera
 
 Os detalhes de operação, integrações e testes estão em [SISTEMA.md](SISTEMA.md).
 
-Para configurar atendimento automático e avisos de pedidos pela API oficial do
-WhatsApp no Render, siga [WHATSAPP.md](WHATSAPP.md). As credenciais ficam nas
-variáveis privadas do serviço; o uso apenas do aplicativo no celular não ativa a API.
+Para conectar o WhatsApp pelo QR Code com Evolution API, configurar atendimento
+automático e enviar avisos de pedidos, siga [WHATSAPP.md](WHATSAPP.md). A conexão
+roda em um serviço separado; as chaves ficam nas variáveis privadas do Render.

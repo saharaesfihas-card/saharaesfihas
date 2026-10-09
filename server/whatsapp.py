@@ -1,4 +1,4 @@
-"""WhatsApp Cloud API: webhooks autenticados e fila persistente no disco do PDV."""
+"""WhatsApp: Evolution API por QR ou Cloud API, com fila privada persistente."""
 from contextlib import asynccontextmanager
 import hashlib
 import hmac
@@ -18,6 +18,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .core import db, require_admin, utcnow
+from . import evolution
 
 router = APIRouter()
 LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo',
@@ -28,14 +29,18 @@ DELIVERY_RANK = {'accepted': 0, 'sent': 1, 'delivered': 2, 'read': 3, 'failed': 
 
 
 def config():
-    values = {key: os.environ.get(key, '').strip() for key in REQUIRED}
+    values = {key: os.environ.get(key, '').strip() for key in REQUIRED + evolution.REQUIRED}
     version = os.environ.get('SAHARA_WHATSAPP_API_VERSION', 'v25.0').strip()
     values.update(enabled=os.environ.get('SAHARA_WHATSAPP_ENABLED') == '1', version=version,
+                  provider=os.environ.get('SAHARA_WHATSAPP_PROVIDER', 'evolution').strip(),
                   template=os.environ.get('SAHARA_WHATSAPP_ORDER_TEMPLATE', '').strip(),
                   language=os.environ.get('SAHARA_WHATSAPP_TEMPLATE_LANGUAGE', 'pt_BR').strip(),
                   menu=os.environ.get('SAHARA_PUBLIC_URL', 'https://sahara-esfihas-pdv.onrender.com').rstrip('/') + '/index.html')
-    values['ready'] = values['enabled'] and all(values[key] for key in REQUIRED) and bool(
-        re.fullmatch(r'v\d+\.\d+', version) and values['SAHARA_WHATSAPP_PHONE_NUMBER_ID'].isdigit())
+    required = evolution.REQUIRED if values['provider'] == 'evolution' else REQUIRED
+    valid = evolution.valid_config(values) if values['provider'] == 'evolution' else bool(
+        values['provider'] == 'meta' and re.fullmatch(r'v\d+\.\d+', version)
+        and values['SAHARA_WHATSAPP_PHONE_NUMBER_ID'].isdigit())
+    values['ready'] = values['enabled'] and all(values[key] for key in required) and valid
     return values
 
 
@@ -72,6 +77,9 @@ def initialize(conn):
       );
       CREATE TABLE IF NOT EXISTS whatsapp_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     ''')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(whatsapp_outbox)')}
+    if 'provider' not in columns:
+        conn.execute("ALTER TABLE whatsapp_outbox ADD COLUMN provider TEXT NOT NULL DEFAULT 'meta'")
 
 
 def setting(conn, key, default=''):
@@ -87,8 +95,8 @@ def queue(conn, event, recipient, kind, body, order_id=None, status=None):
     if not recipient:
         return
     conn.execute('''INSERT OR IGNORE INTO whatsapp_outbox
-        (id,event_key,phone,kind,body,order_id,order_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)''',
-        (uuid4().hex, event, recipient, kind, body[:4096], order_id, status, utcnow(), utcnow()))
+        (id,event_key,phone,kind,body,order_id,order_status,created_at,updated_at,provider) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+        (uuid4().hex, event, recipient, kind, body[:4096], order_id, status, utcnow(), utcnow(), config()['provider']))
 
 
 def order_notice(conn, order):
@@ -148,7 +156,7 @@ def answer(conn, recipient, text):
 def verify(request: Request):
     cfg = config()
     token = request.query_params.get('hub.verify_token', '')
-    if (not cfg['ready'] or request.query_params.get('hub.mode') != 'subscribe' or
+    if (not cfg['ready'] or cfg['provider'] != 'meta' or request.query_params.get('hub.mode') != 'subscribe' or
             not hmac.compare_digest(token.encode(), cfg['SAHARA_WHATSAPP_VERIFY_TOKEN'].encode())):
         raise HTTPException(403, 'Verificação não autorizada.')
     challenge = request.query_params.get('hub.challenge', '')
@@ -162,7 +170,7 @@ def verify(request: Request):
 @router.post('/api/whatsapp/webhook')
 async def receive(request: Request):
     cfg = config()
-    if not cfg['ready']:
+    if not cfg['ready'] or cfg['provider'] != 'meta':
         raise HTTPException(503, 'WhatsApp ainda não configurado.')
     raw = await request.body()
     if len(raw) > 65536:
@@ -218,12 +226,121 @@ async def receive(request: Request):
     return {'ok': True}
 
 
+def record_receipt(conn, identifier, status, error=''):
+    old = conn.execute('SELECT status FROM whatsapp_receipts WHERE provider_id=?', (identifier,)).fetchone()
+    if old and (DELIVERY_RANK[old['status']] >= DELIVERY_RANK[status] or
+                (old['status'] in ('delivered', 'read') and status == 'failed')):
+        return
+    conn.execute('INSERT INTO whatsapp_receipts VALUES(?,?,?) ON CONFLICT(provider_id) DO UPDATE SET status=excluded.status,error=excluded.error', (identifier, status, error))
+    conn.execute('UPDATE whatsapp_outbox SET status=?,error=?,updated_at=? WHERE provider_id=?', (status, error, utcnow(), identifier))
+
+
+@router.post('/api/whatsapp/evolution/webhook')
+async def evolution_webhook(request: Request):
+    cfg = config()
+    if cfg['provider'] != 'evolution' or not cfg['ready']:
+        raise HTTPException(503, 'Evolution API ainda não configurada.')
+    if not hmac.compare_digest(request.headers.get('x-sahara-webhook-secret', '').encode(),
+                               cfg['SAHARA_EVOLUTION_WEBHOOK_SECRET'].encode()):
+        raise HTTPException(403, 'Evento não autorizado.')
+    raw = await request.body()
+    if len(raw) > 65536:
+        raise HTTPException(413, 'Solicitação muito grande.')
+    try:
+        body = json.loads(raw)
+        if not isinstance(body, dict) or body.get('instance') != cfg['SAHARA_EVOLUTION_INSTANCE']:
+            raise HTTPException(403, 'Instância não autorizada.')
+        event = body.get('event', '').lower().replace('_', '.')
+        data = body.get('data', {})
+        with db(request) as conn:
+            if event == 'connection.update':
+                state = data.get('state')
+                if state in ('open', 'close', 'connecting'):
+                    put_setting(conn, 'evolution_connection', state)
+                    put_setting(conn, 'evolution_connection_at', utcnow())
+            elif event == 'messages.update':
+                mapping = {'SERVER_ACK': 'sent', 'DELIVERY_ACK': 'delivered', 'READ': 'read',
+                           'PLAYED': 'read', 'ERROR': 'failed', 2: 'sent', 3: 'delivered', 4: 'read', 5: 'read', 0: 'failed'}
+                for item in data if isinstance(data, list) else [data]:
+                    if item.get('fromMe') is not True and item.get('key', {}).get('fromMe') is not True:
+                        continue
+                    identifier = item.get('keyId') or item.get('key', {}).get('id')
+                    status = mapping.get(item.get('status', item.get('update', {}).get('status')))
+                    if isinstance(identifier, str) and identifier and status:
+                        record_receipt(conn, 'evolution:' + identifier, status, 'A Evolution informou falha na entrega.' if status == 'failed' else '')
+            elif event == 'messages.upsert':
+                for item in data if isinstance(data, list) else [data]:
+                    key = item.get('key', {})
+                    if key.get('fromMe') is not False:
+                        continue  # Ignora mensagens próprias: evita respostas em loop.
+                    recipient, identifier = evolution.jid_phone(key), key.get('id')
+                    if not recipient or not isinstance(identifier, str) or not identifier or len(identifier) > 512:
+                        continue
+                    timestamp = item.get('messageTimestamp', 0)
+                    if isinstance(timestamp, dict):
+                        timestamp = timestamp.get('low', 0)
+                    timestamp = int(timestamp)
+                    if timestamp <= 0 or timestamp > int(time.time()):
+                        continue
+                    message = item.get('message', {})
+                    if message.get('protocolMessage') or message.get('reactionMessage'):
+                        continue
+                    text = evolution.text_message(message)
+                    if not isinstance(text, str):
+                        raise ValueError
+                    identifier = 'evolution:' + cfg['SAHARA_EVOLUTION_INSTANCE'] + ':' + identifier
+                    if not conn.execute('INSERT OR IGNORE INTO whatsapp_inbound VALUES(?,?,?,?)', (identifier, recipient, text[:4096] or '[Mensagem não textual]', utcnow())).rowcount:
+                        continue
+                    conn.execute('INSERT INTO whatsapp_contacts(phone,last_inbound) VALUES(?,?) ON CONFLICT(phone) DO UPDATE SET last_inbound=MAX(last_inbound,excluded.last_inbound)', (recipient, timestamp))
+                    if timestamp < int(time.time()) - 86400:
+                        continue  # Não responde ao histórico antigo sincronizado ao parear.
+                    reply = answer(conn, recipient, text) if text else answer(conn, recipient, 'atendente')
+                    if reply:
+                        queue(conn, 'reply:' + identifier, recipient, 'reply', reply)
+            put_setting(conn, 'evolution_last_webhook_at', utcnow())
+    except (ValueError, TypeError, AttributeError, KeyError, RecursionError):
+        raise HTTPException(400, 'Evento inválido.') from None
+    return {'ok': True}
+
+
+def evolution_status(request, cfg):
+    if not cfg['ready']:
+        return {'state': 'not_configured', 'connected': False, 'error': ''}
+    try:
+        state = evolution.connection(cfg)
+        with db(request) as conn:
+            put_setting(conn, 'evolution_connection', state)
+            put_setting(conn, 'evolution_connection_at', utcnow())
+        return {'state': state, 'connected': state == 'open', 'error': ''}
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError):
+        with db(request) as conn:
+            put_setting(conn, 'evolution_connection', 'unavailable')
+        return {'state': 'unavailable', 'connected': False, 'error': 'Não foi possível consultar a Evolution API. Confira o serviço, a URL e a chave no Render.'}
+
+
+@router.post('/api/admin/whatsapp/connect', dependencies=[Depends(require_admin)])
+def connect_evolution(request: Request):
+    cfg = config()
+    if cfg['provider'] != 'evolution' or not cfg['ready']:
+        raise HTTPException(503, 'Configure a URL, a chave, a instância e o segredo de webhook da Evolution API no Render.')
+    try:
+        result = evolution.connect(cfg)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError, TypeError):
+        raise HTTPException(502, 'Não foi possível preparar a conexão. Confira a Evolution API e suas credenciais no Render.') from None
+    with db(request) as conn:
+        put_setting(conn, 'evolution_connection', result['state'])
+        put_setting(conn, 'evolution_connection_at', utcnow())
+    return result
+
+
 def payload(conn, row, cfg):
     contact = conn.execute('SELECT * FROM whatsapp_contacts WHERE phone=?', (row['phone'],)).fetchone()
     if row['kind'] == 'order':
         order = conn.execute('SELECT whatsapp_opt_in FROM orders WHERE id=?', (row['order_id'],)).fetchone()
         if not order or not order['whatsapp_opt_in'] or (contact and contact['opted_out']):
             return None, 'skipped', 'Avisos não autorizados pelo cliente.'
+    if cfg['provider'] == 'evolution':
+        return {'number': row['phone'], 'text': row['body'], 'linkPreview': False}, None, None
     base = {'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': row['phone']}
     if contact and contact['last_inbound'] > int(time.time()) - 86400:
         return base | {'type': 'text', 'text': {'preview_url': False, 'body': row['body']}}, None, None
@@ -236,6 +353,8 @@ def payload(conn, row, cfg):
 
 def send(cfg, data):
     """Retorna o ID aceito pela Meta; nunca registra tokens nem respostas brutas."""
+    if cfg['provider'] == 'evolution':
+        return evolution.send(cfg, data)
     request = URLRequest(f"https://graph.facebook.com/{cfg['version']}/{cfg['SAHARA_WHATSAPP_PHONE_NUMBER_ID']}/messages",
                          data=json.dumps(data).encode(), method='POST',
                          headers={'Authorization': 'Bearer ' + cfg['SAHARA_WHATSAPP_ACCESS_TOKEN'], 'Content-Type': 'application/json'})
@@ -253,7 +372,9 @@ def process_one(app):
         return False
     request = SimpleNamespace(app=app)
     with db(request) as conn:
-        row = conn.execute("SELECT * FROM whatsapp_outbox WHERE status='pending' AND next_attempt<=? ORDER BY created_at,id LIMIT 1", (int(time.time()),)).fetchone()
+        if cfg['provider'] == 'evolution' and setting(conn, 'evolution_connection') != 'open':
+            return False  # Mantém os envios na fila até que a conexão seja confirmada.
+        row = conn.execute("SELECT * FROM whatsapp_outbox WHERE status='pending' AND provider=? AND next_attempt<=? ORDER BY created_at,id LIMIT 1", (cfg['provider'], int(time.time()))).fetchone()
         if not row:
             return False
         data, status, error = payload(conn, row, cfg)
@@ -267,7 +388,7 @@ def process_one(app):
     except HTTPError as exc:
         # 429 é rejeição explícita; falhas ambíguas não são reenviadas automaticamente.
         status = 'pending' if exc.code == 429 and row['attempts'] < 4 else ('uncertain' if exc.code >= 500 else 'failed')
-        error = f'Meta HTTP {exc.code}. Confira a configuração e o número no painel da Meta.'
+        error = f"{'Evolution API' if cfg['provider'] == 'evolution' else 'Meta'} HTTP {exc.code}. Confira a conexão e a configuração do serviço."
         next_attempt = int(time.time()) + min(60 * 2 ** row['attempts'], 3600)
     except (URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError):
         status, error = 'uncertain', 'Envio sem confirmação. Confira a conversa antes de reenviar para evitar duplicidade.'
@@ -304,19 +425,22 @@ async def lifespan(app):
 def availability():
     cfg = config()
     return {'id': 'whatsapp', 'label': 'WhatsApp · atendimento e avisos de pedidos', 'available': cfg['ready'],
-            'reason': 'Configuração presente. Confira a validação do webhook e os envios na área de WhatsApp.' if cfg['ready'] else
-            'Ative a API oficial da Meta e configure o número e as credenciais no Render. O aplicativo sozinho não conecta o PDV.'}
+            'reason': ('Configuração presente. Confira a conexão e os envios na área de WhatsApp.' if cfg['ready'] else
+                       'Configure o serviço Evolution API no Render para conectar pelo QR Code.' if cfg['provider'] == 'evolution' else
+                       'Ative a API oficial da Meta e configure o número e as credenciais no Render.')}
 
 
 @router.get('/api/admin/whatsapp', dependencies=[Depends(require_admin)])
 def dashboard(request: Request):
     cfg = config()
+    connection = evolution_status(request, cfg) if cfg['provider'] == 'evolution' else None
     with db(request) as conn:
-        return {'configured': cfg['ready'], 'enabled': cfg['enabled'], 'template_configured': bool(cfg['template']),
-                'webhook_path': '/api/whatsapp/webhook',
-                'webhook_verified_at': setting(conn, 'webhook_verified_at'), 'last_webhook_at': setting(conn, 'last_webhook_at'),
-                'missing': [key for key in REQUIRED if not cfg[key]],
-                'messages': [dict(row) for row in conn.execute('SELECT id,phone,kind,body,status,error,created_at FROM whatsapp_outbox ORDER BY created_at DESC LIMIT 50')],
+        return {'provider': cfg['provider'], 'connection': connection, 'configured': cfg['ready'], 'enabled': cfg['enabled'], 'template_configured': bool(cfg['template']),
+                'webhook_path': '/api/whatsapp/evolution/webhook' if cfg['provider'] == 'evolution' else '/api/whatsapp/webhook',
+                'webhook_verified_at': setting(conn, 'webhook_verified_at') if cfg['provider'] == 'meta' else '',
+                'last_webhook_at': setting(conn, 'evolution_last_webhook_at' if cfg['provider'] == 'evolution' else 'last_webhook_at'),
+                'missing': [key for key in (evolution.REQUIRED if cfg['provider'] == 'evolution' else REQUIRED) if not cfg[key]],
+                'messages': [dict(row) for row in conn.execute('SELECT id,phone,kind,body,status,error,created_at FROM whatsapp_outbox WHERE provider=? ORDER BY created_at DESC LIMIT 50', (cfg['provider'],))],
                 'conversations': [dict(row) for row in conn.execute('''SELECT c.*,
                     (SELECT body FROM whatsapp_inbound i WHERE i.phone=c.phone ORDER BY created_at DESC,rowid DESC LIMIT 1) AS last_message
                     FROM whatsapp_contacts c ORDER BY last_inbound DESC LIMIT 50''')]}
@@ -341,7 +465,9 @@ def manual_reply(body: Reply, request: Request):
                 raise HTTPException(409, 'Identificador já usado em outra resposta.')
             return {'queued': True, 'replayed': True}
         contact = conn.execute('SELECT * FROM whatsapp_contacts WHERE phone=?', (recipient,)).fetchone()
-        if not contact or contact['last_inbound'] <= int(time.time()) - 86400:
+        if not contact:
+            raise HTTPException(409, 'A conversa precisa ter uma mensagem recebida do cliente.')
+        if config()['provider'] == 'meta' and contact['last_inbound'] <= int(time.time()) - 86400:
             raise HTTPException(409, 'O cliente precisa enviar uma nova mensagem para abrir a janela de atendimento de 24 horas.')
         conn.execute('UPDATE whatsapp_contacts SET human_until=? WHERE phone=?', (int(time.time()) + 86400, recipient))
         queue(conn, 'manual:' + body.idempotency_key, recipient, 'manual', body.message)
@@ -364,6 +490,8 @@ def retry(identifier: str, request: Request):
         row = conn.execute('SELECT * FROM whatsapp_outbox WHERE id=?', (identifier,)).fetchone()
         if not row:
             raise HTTPException(404, 'Mensagem não encontrada.')
+        if row['provider'] != config()['provider']:
+            raise HTTPException(409, 'Esta mensagem pertence a outra conexão de WhatsApp.')
         if row['status'] not in ('failed', 'blocked'):
             raise HTTPException(409, 'Esta mensagem não pode ser reenviada automaticamente. Confira a conversa.')
         conn.execute("UPDATE whatsapp_outbox SET status='pending',attempts=0,next_attempt=0,error='',provider_id=NULL,updated_at=? WHERE id=?", (utcnow(), identifier))

@@ -29,6 +29,7 @@ class WhatsAppTests(unittest.TestCase):
 
     def setUp(self):
         self.env = patch.dict(os.environ, {
+            'SAHARA_WHATSAPP_PROVIDER': 'meta',
             'SAHARA_WHATSAPP_ENABLED': '1', 'SAHARA_WHATSAPP_ACCESS_TOKEN': 'test-token-not-real',
             'SAHARA_WHATSAPP_PHONE_NUMBER_ID': '12345', 'SAHARA_WHATSAPP_APP_SECRET': 'test-secret',
             'SAHARA_WHATSAPP_VERIFY_TOKEN': 'test-verify', 'SAHARA_WHATSAPP_ORDER_TEMPLATE': '',

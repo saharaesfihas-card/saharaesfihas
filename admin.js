@@ -659,7 +659,7 @@
     if (!integrations.length) p.append(el('p', 'Nenhuma integração informada pelo servidor.', 'empty'));
     for (const integration of integrations) {
       const item = el('article', undefined, 'integration'); const heading = el('h3', integration.label || integration.id);
-      heading.append(badge(integration.available ? 'Disponível' : 'Ativação pendente', integration.available ? 'success' : 'warning'));
+      heading.append(badge(integration.available ? (integration.id === 'whatsapp' ? 'Configurada' : 'Disponível') : 'Ativação pendente', integration.available ? 'success' : 'warning'));
       item.append(heading, el('p', integration.reason || 'Consulte a configuração do serviço.')); p.append(item);
     }
     screen.append(p);
@@ -668,11 +668,34 @@
 
   async function loadWhatsApp(screen) {
     const data = await api('/admin/whatsapp');
+    const byQR = data.provider === 'evolution';
     const setup = panel('WhatsApp da Sahara', 'Atendimento automático, consulta de pedidos e avisos de andamento. Novos pedidos são finalizados no cardápio e registrados no PDV.');
-    setup.append(el('p', data.configured ? 'Configuração presente no servidor. A confirmação de envio aparece no histórico abaixo.' : 'Ativação pendente: conecte o número à API oficial da Meta e configure as credenciais no Render.'));
-    setup.append(el('p', `Verificação do webhook: ${data.webhook_verified_at ? date(data.webhook_verified_at) : 'pendente'}`));
+    setup.append(el('p', data.configured ? 'Configuração presente no servidor. A confirmação de envio aparece no histórico abaixo.' : byQR ? 'Ativação pendente: configure o serviço Evolution API no Render para conectar pelo QR Code.' : 'Ativação pendente: conecte o número à API oficial da Meta e configure as credenciais no Render.'));
+    if (byQR) {
+      const statuses = { open: 'Conectado', close: 'Desconectado', connecting: 'Aguardando conexão pelo celular', not_created: 'Pronto para criar a conexão', not_configured: 'Configuração pendente', unavailable: 'Serviço indisponível' };
+      const connection = el('p', `WhatsApp: ${statuses[data.connection?.state] || 'Não confirmado'}`);
+      connection.setAttribute('role', 'status'); setup.append(connection);
+      if (data.connection?.error) setup.append(el('p', data.connection.error, 'help'));
+      const pairing = el('div', undefined, 'whatsapp-pairing');
+      const control = button(data.connection?.connected ? 'Verificar conexão' : 'Gerar QR Code', async () => {
+        pairing.replaceChildren();
+        connection.textContent = 'Preparando conexão…';
+        try {
+          const result = await api('/admin/whatsapp/connect', { method: 'POST', body: {} });
+          connection.textContent = `WhatsApp: ${statuses[result.state] || 'Aguardando conexão pelo celular'}`;
+          if (result.connected) { showNotice('WhatsApp conectado.'); return; }
+          if (result.qrcode) {
+            const image = el('img'); image.src = result.qrcode; image.alt = 'QR Code para conectar o WhatsApp da Sahara'; image.width = 280; image.height = 280;
+            pairing.append(image, el('p', 'No WhatsApp Business, abra Aparelhos conectados e toque em Conectar um aparelho. Escaneie este QR Code.'));
+          } else pairing.append(el('p', 'O QR Code ainda não está pronto. Aguarde alguns segundos e toque em Gerar QR Code novamente.'));
+        } catch (error) { connection.textContent = 'Conexão não confirmada.'; throw error; }
+      });
+      control.disabled = !data.configured;
+      setup.append(control, pairing, el('p', 'Após escanear, use Atualizar dados para confirmar a conexão. Se o QR Code expirar, gere outro. O pareamento deve ser feito com o WhatsApp da loja.', 'help'));
+    } else setup.append(el('p', `Verificação do webhook: ${data.webhook_verified_at ? date(data.webhook_verified_at) : 'pendente'}`));
     setup.append(el('p', `Último evento recebido: ${data.last_webhook_at ? date(data.last_webhook_at) : 'nenhum'}`));
-    setup.append(el('p', data.template_configured ? 'Modelo de avisos configurado. A Meta precisa aprová-lo antes do uso.' : 'Sem modelo de avisos: fora das 24 horas após a mensagem do cliente, os avisos ficam bloqueados.'));
+    if (!byQR) setup.append(el('p', data.template_configured ? 'Modelo de avisos configurado. A Meta precisa aprová-lo antes do uso.' : 'Sem modelo de avisos: fora das 24 horas após a mensagem do cliente, os avisos ficam bloqueados.'));
+    else setup.append(el('p', 'A conexão depende da sessão do WhatsApp. Enquanto estiver desconectada, as mensagens ficam na fila.', 'help'));
     screen.append(setup);
     const conversations = list(data, 'conversations');
     const inbox = panel('Atendimento pelo WhatsApp', 'O cliente pode pedir um atendente. Ao responder por aqui, o robô fica pausado para essa conversa por 24 horas. O cliente pode retornar enviando MENU.');
@@ -687,14 +710,14 @@
         const fingerprint = JSON.stringify(payload);
         if (!attempt || attempt.fingerprint !== fingerprint) attempt = { fingerprint, key: crypto.randomUUID() };
         await saved('/admin/whatsapp/reply', { ...payload, idempotency_key: attempt.key }, 'Resposta colocada na fila. Confira o envio no histórico.');
-      }, 'Respostas livres exigem mensagem do cliente nas últimas 24 horas.');
+      }, byQR ? 'A resposta fica na fila até o WhatsApp estar conectado.' : 'Respostas livres exigem mensagem do cliente nas últimas 24 horas.');
       field(f.grid, 'whatsapp_phone', 'Conversa', { type: 'select', choices: conversations.map(row => [row.phone, row.phone]) });
       field(f.grid, 'whatsapp_message', 'Sua resposta', { type: 'textarea', wide: true, required: true, maxLength: 4096 });
       inbox.append(f.form);
     }
     screen.append(inbox);
-    const labels = { pending: 'Na fila', sending: 'Enviando', accepted: 'Aceita pela Meta', sent: 'Enviada', delivered: 'Entregue', read: 'Lida', failed: 'Falhou', blocked: 'Bloqueada', uncertain: 'Sem confirmação', skipped: 'Não enviada' };
-    const history = panel('Histórico de mensagens', '“Aceita pela Meta” indica recebimento pela API. A entrega e a leitura dependem das confirmações do WhatsApp. Use Atualizar dados para consultar novas mensagens.');
+    const labels = { pending: 'Na fila', sending: 'Enviando', accepted: 'Aceita pela API', sent: 'Enviada', delivered: 'Entregue', read: 'Lida', failed: 'Falhou', blocked: 'Bloqueada', uncertain: 'Sem confirmação', skipped: 'Não enviada' };
+    const history = panel('Histórico de mensagens', '“Aceita pela API” indica recebimento pelo serviço de conexão. A entrega e a leitura dependem das confirmações do WhatsApp. Use Atualizar dados para consultar novas mensagens.');
     history.append(table('Envios do WhatsApp', [['Data', row => date(row.created_at)], ['Número', row => row.phone], ['Mensagem', row => row.body], ['Situação', row => labels[row.status] || row.status], ['Detalhe', row => row.error || '—'], ['Ação', row => {
       if (!data.configured || !['failed', 'blocked'].includes(row.status)) return '—';
       return button('Tentar novamente', async () => {

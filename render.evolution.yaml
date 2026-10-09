@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Blueprint SEPARADO do PDV. Revise os custos no Render antes de criar.
+services:
+  - type: web
+    name: sahara-whatsapp-evolution
+    runtime: image
+    image:
+      url: docker.io/evoapicloud/evolution-api:v2.3.7
+    plan: 1c-2g
+    region: oregon
+    numInstances: 1
+    healthCheckPath: /
+    autoDeployTrigger: 'off'
+    disk:
+      name: sahara-whatsapp-session
+      mountPath: /evolution/instances
+      sizeGB: 1
+    envVars:
+      - key: SERVER_TYPE
+        value: http
+      - key: SERVER_PORT
+        value: '8080'
+      - key: SERVER_URL
+        fromService:
+          name: sahara-whatsapp-evolution
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: AUTHENTICATION_API_KEY
+        generateValue: true
+      - key: AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES
+        value: 'false'
+      - key: DATABASE_PROVIDER
+        value: postgresql
+      - key: DATABASE_CONNECTION_URI
+        fromDatabase:
+          name: sahara-whatsapp-db
+          property: connectionString
+      - key: DATABASE_SAVE_DATA_INSTANCE
+        value: 'true'
+      - key: DATABASE_SAVE_DATA_NEW_MESSAGE
+        value: 'true'
+      - key: DATABASE_SAVE_MESSAGE_UPDATE
+        value: 'true'
+      - key: CACHE_REDIS_ENABLED
+        value: 'true'
+      - key: CACHE_REDIS_URI
+        fromService:
+          name: sahara-whatsapp-cache
+          type: keyvalue
+          property: connectionString
+      - key: CACHE_REDIS_PREFIX_KEY
+        value: sahara-evolution
+      - key: CACHE_REDIS_SAVE_INSTANCES
+        value: 'true'
+      - key: CACHE_LOCAL_ENABLED
+        value: 'false'
+      - key: WEBHOOK_GLOBAL_ENABLED
+        value: 'false'
+      - key: LOG_LEVEL
+        value: ERROR,WARN
+      - key: LOG_BAILEYS
+        value: error
+      - key: CONFIG_SESSION_PHONE_CLIENT
+        value: Sahara
+  - type: keyvalue
+    name: sahara-whatsapp-cache
+    plan: 256mb
+    region: oregon
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+databases:
+  - name: sahara-whatsapp-db
+    databaseName: sahara_whatsapp
+    user: sahara_whatsapp
+    plan: 0.1c-256mb
+    region: oregon
+    ipAllowList: []

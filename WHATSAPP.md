@@ -1,140 +1,191 @@
-# WhatsApp da Sahara
+# WhatsApp da Sahara por QR Code — Evolution API
 
-Esta integração usa a **WhatsApp Business Platform / Cloud API oficial da Meta**.
-O aplicativo WhatsApp Business no celular, sozinho, não fornece a conexão com o PDV.
-Não utiliza leitura de QR code, automação do WhatsApp Web nem serviços não oficiais.
+O PDV está preparado para conectar ao WhatsApp Business do celular pela
+**Evolution API v2, usando Baileys/WhatsApp Web**. Este é o caminho solicitado,
+sem ativar a WhatsApp Cloud API da Meta. O aplicativo continua no celular, e
+você vincula a sessão como um aparelho conectado.
 
-## O que foi preparado
+O código não foi publicado nem um número real pareado nesta preparação.
+Conexões não oficiais podem cair ou sofrer bloqueio pelo WhatsApp; o QR Code
+não garante estabilidade nem elimina esse risco.
 
-- Menu automático: cardápio, andamento do pedido, horários, pagamentos e atendente.
-- O cliente escolhe produtos e finaliza no cardápio existente; o checkout registra o
-  pedido no PDV. O robô não interpreta texto livre para criar pedidos ou cobrar pagamentos.
-- Consulta de pedido vinculada ao número autenticado pela Meta, sem confiar no
-  telefone ou ID informado na mensagem.
-- Avisos de preparo, pronto, a caminho, entregue e cancelado. É preciso marcar a
-  autorização de avisos ao finalizar o pedido ou registrá-la no PDV. O cliente pode
-  enviar `ATIVAR AVISOS` para autorizar seus pedidos ativos, ou `PARAR` para desativar.
-- Transferência para a equipe: `ATENDENTE` pausa o robô por 24 horas; a equipe vê a
-  conversa e responde em **Integrações → Atendimento pelo WhatsApp**. `MENU` ou
-  **Retomar robô** volta ao atendimento automático.
-- Histórico com fila, aceite pela API, envio, entrega, leitura e erros. Aceite pela
-  API não significa entrega. Use **Atualizar dados** para consultar novos eventos.
+## O que está disponível
 
-Campanhas promocionais continuam como rascunhos. A autorização para ofertas é
-separada da autorização para avisos de pedidos. IA generativa não foi adicionada:
-as respostas usam regras e dados reais do PDV.
+- **Integrações → WhatsApp da Sahara → Gerar QR Code**: cria a instância quando
+  necessário, configura os eventos e mostra o QR Code no painel privado.
+- Consulta real da conexão: conectado, desconectado, aguardando pareamento ou
+  indisponível. A configuração presente não é anunciada como conexão ativa.
+- Menu automático: cardápio, consultar pedido, horários, pagamentos e atendente.
+- Novos pedidos são finalizados no cardápio existente e registrados no PDV.
+  O robô não transforma pedidos em texto livre ou áudio em pedidos completos.
+- Avisos de preparo, pronto, a caminho, entregue e cancelado, com autorização
+  específica do cliente. Não são exigidos os modelos da Cloud API para este
+  transporte; a autorização do cliente continua necessária.
+- `PARAR` desativa avisos; `ATIVAR AVISOS` autoriza os pedidos ativos do número.
+  A autorização para promoções é separada; campanhas continuam como rascunhos.
+- `ATENDENTE` pausa o robô nessa conversa por 24 horas. A equipe pode responder
+  pelo PDV. `MENU` ou **Retomar robô** reativa o atendimento automático.
+- Mensagens enviadas pelo próprio WhatsApp, grupos e broadcasts não acionam o
+  robô. Histórico antigo sincronizado no pareamento não recebe respostas.
+- Áudios e outros conteúdos não textuais seguem para a equipe; não há transcrição.
+- O histórico mostra fila, aceite pelo serviço, envio, entrega, leitura e falha.
+  Aceite não significa entrega. As confirmações dependem dos eventos do WhatsApp.
 
-## 1. Habilitar o número na Meta
+## 1. Publicar a atualização do PDV
 
-Na conta da Sahara, configure um app empresarial com WhatsApp, a conta WhatsApp
-Business e o número que enviará as mensagens. Para os primeiros testes, pode usar
-o número de teste da Meta e cadastrar os destinatários de teste autorizados.
+O repositório conectado ao Render é:
 
-Como o número atual usa o aplicativo no celular, confirme com a Meta ou seu
-provedor se a conta e o número são elegíveis ao uso simultâneo do aplicativo e da
-API (coexistência). Caso contrário, o provedor orientará a migração ou o uso de um
-número separado. **Não exclua a conta do aplicativo para tentar ativar a integração.**
+`https://github.com/saharaesfihas-card/saharaesfihas`
 
-Tenha o **Phone Number ID** (ID técnico, não o telefone), **App Secret** e um token
-de acesso com autorização `whatsapp_business_messaging` para o número. Para
-produção, configure o token apropriado ao app e à conta; o token temporário de
-teste expira. Mantenha os segredos no Render, nunca no GitHub ou no chat.
+O pacote de atualização inclui a integração completa, inclusive os arquivos da
+preparação anterior. Atualize mantendo as mesmas pastas; preserve os demais
+arquivos, as configurações do PDV, a senha de gestão e o disco de pedidos.
 
-## 2. Publicar o código
+Depois de publicar no repositório, use **Manual Deploy → Deploy latest commit**
+no serviço `sahara-esfihas-pdv`. A conexão permanece desligada até configurar as
+variáveis abaixo. O banco é atualizado automaticamente, sem apagar os pedidos.
+Pedidos antigos permanecem sem autorização de avisos; não há disparo retroativo.
 
-Publique as alterações no repositório conectado ao serviço Render. Preserve os
-demais arquivos, o disco persistente, a senha de gestão e `SAHARA_DATA_DIR`.
-O banco recebe tabelas de WhatsApp e uma coluna de autorização de avisos por
-pedido automaticamente; pedidos existentes permanecem sem autorização.
+## 2. Hospedar a Evolution API
 
-O Blueprint atual usa implantação manual. Depois de atualizar o repositório,
-no Render use **Manual Deploy → Deploy latest commit**. As credenciais abaixo
-podem ser configuradas com a integração desligada (`SAHARA_WHATSAPP_ENABLED=0`).
+Ela precisa de um serviço separado e contínuo. Pode usar uma Evolution API v2
+já contratada ou hospedada, desde que permita configurar webhooks com cabeçalhos
+privados. Nesse caso, pule para o passo 3.
 
-## 3. Configurar Environment no Render
+Para hospedar no Render, foi preparado **render.evolution.yaml**, um Blueprint
+separado do atual PDV. Ele define:
 
-No serviço `sahara-esfihas-pdv`, adicione:
+- Evolution API `evoapicloud/evolution-api:v2.3.7`, versão estável publicada pelo
+  projeto, com 2 GB de RAM e disco persistente de sessão.
+- PostgreSQL para dados e sessão da Evolution API.
+- Key Value compatível com Redis para cache e sessão.
+
+**Os três recursos e o disco geram custos adicionais.** O Render mostra os
+valores antes da criação; confira-os na conta da Sahara. Nada foi criado durante
+esta preparação. O plano gratuito, que pode suspender o serviço, não foi usado
+como base para um atendimento contínuo.
+
+No Render, crie um novo Blueprint a partir do repositório, selecionando o arquivo
+`render.evolution.yaml`. Não substitua o Blueprint `render.yaml` do PDV por este.
+Aguarde os três recursos ficarem disponíveis. O nome sugerido do novo serviço é
+`sahara-whatsapp-evolution`; use a URL HTTPS realmente atribuída pelo Render,
+que pode diferir do nome sugerido.
+
+A chave `AUTHENTICATION_API_KEY` da Evolution é gerada pelo Blueprint. Copie-a
+privadamente em **Environment** para a configuração do PDV. Ela não deve ser
+publicada no repositório nem enviada no chat. O PDV gera e exibe o QR Code, portanto
+não é necessário hospedar também o Evolution Manager para esse fluxo.
+
+Se usar outro serviço/provedor, mantenha PostgreSQL, armazenamento da sessão e
+cache conforme a versão instalada. A adaptação foi preparada para Evolution API
+**v2**; Evolution Go e outros produtos têm contratos diferentes.
+
+## 3. Configurar Environment no PDV
+
+No serviço **sahara-esfihas-pdv**, configure:
 
 | Variável | Valor |
 | --- | --- |
-| `SAHARA_WHATSAPP_ENABLED` | `1` para ativar; `0` para desligar sem apagar os dados |
-| `SAHARA_WHATSAPP_ACCESS_TOKEN` | Token privado com acesso ao número |
-| `SAHARA_WHATSAPP_PHONE_NUMBER_ID` | ID técnico do número na Meta |
-| `SAHARA_WHATSAPP_APP_SECRET` | Segredo privado do app Meta, usado para autenticar eventos |
-| `SAHARA_WHATSAPP_VERIFY_TOKEN` | Segredo aleatório criado por você e repetido na configuração do webhook |
-| `SAHARA_WHATSAPP_API_VERSION` | Versão Graph API suportada pelo app; padrão `v25.0` |
+| `SAHARA_WHATSAPP_ENABLED` | `1` para ativar; `0` para pausar |
+| `SAHARA_WHATSAPP_PROVIDER` | `evolution` |
+| `SAHARA_EVOLUTION_URL` | URL HTTPS do serviço Evolution, sem `/manager`, usuário ou senha na URL |
+| `SAHARA_EVOLUTION_API_KEY` | A chave privada `AUTHENTICATION_API_KEY` do serviço Evolution |
+| `SAHARA_EVOLUTION_INSTANCE` | `sahara` |
+| `SAHARA_EVOLUTION_WEBHOOK_SECRET` | Segredo aleatório privado, diferente da chave da API |
 | `SAHARA_PUBLIC_URL` | `https://sahara-esfihas-pdv.onrender.com` |
-| `SAHARA_WHATSAPP_ORDER_TEMPLATE` | Nome exato do modelo aprovado, por exemplo `sahara_pedido_status` |
-| `SAHARA_WHATSAPP_TEMPLATE_LANGUAGE` | Idioma aprovado do modelo, por exemplo `pt_BR` |
 
-Não use o telefone comum no campo Phone Number ID. A disponibilidade exibida no
-painel significa que a configuração está presente; não testa a validade do token.
-A confirmação de funcionamento vem dos eventos e das mensagens reais.
+Para gerar o segredo de webhook no computador, pode usar:
 
-## 4. Webhook na Meta
+```sh
+python -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
 
-Configure a URL de retorno:
+Copie o valor somente para o campo privado do Render. O arquivo
+`.env.whatsapp.example` contém os nomes de configuração e valores vazios.
 
-`https://sahara-esfihas-pdv.onrender.com/api/whatsapp/webhook`
+A Evolution precisa alcançar a URL pública HTTPS do PDV. Se houver regras de
+rede no provedor, permita essa comunicação e o acesso da Evolution ao WhatsApp.
+Mantenha o HTTPS ativo. As credenciais da Meta não são necessárias para o modo
+`evolution`; a alternativa oficial continua disponível em **WHATSAPP-META.md**.
 
-Use o mesmo valor de `SAHARA_WHATSAPP_VERIFY_TOKEN`. Após a verificação, assine o
-campo **messages** e confirme que o app está inscrito na conta WhatsApp Business.
-O servidor devolve o desafio GET como texto e verifica a assinatura HMAC-SHA256
-de cada evento POST com o App Secret. Ignora eventos de outros Phone Number IDs.
+## 4. Parear o número
 
-## 5. Modelo de aviso de pedido
+1. Abra `https://sahara-esfihas-pdv.onrender.com/admin.html` e entre na gestão.
+2. Vá a **Integrações** e confira **WhatsApp da Sahara**.
+3. Toque em **Gerar QR Code**. O PDV cria a instância `sahara`, se necessário,
+   e configura o webhook autenticado antes de gerar o código.
+4. No WhatsApp Business **da loja**, abra **Aparelhos conectados → Conectar um
+   aparelho** e escaneie o QR Code exibido no painel.
+5. Se o painel estiver no mesmo celular do WhatsApp, abra o PDV em um computador
+   ou em outro aparelho para conseguir escanear a tela.
+6. Use **Atualizar dados** no PDV e confira **WhatsApp: Conectado**. Se o QR
+   expirar ou não estiver pronto, toque em **Gerar QR Code** novamente.
 
-Crie e submeta à aprovação da Meta um modelo de utilidade, sem cabeçalho, rodapé
-ou botões obrigatórios, com dois parâmetros **posicionais** no corpo:
+O QR Code é uma credencial de pareamento: não compartilhe com terceiros.
+O PDV não envia a chave da Evolution nem o segredo de webhook ao navegador.
+**Verificar conexão** também reaplica a configuração de webhook. Use esse botão
+após reinício ou alteração na Evolution, especialmente se os eventos pararem.
 
-> Sahara: seu pedido #{{1}} está {{2}}.
+## 5. Testar antes de usar na operação
 
-Exemplos para aprovação: parâmetro 1 `pedido-123`, parâmetro 2 `em preparo`.
-O nome e o idioma cadastrados devem coincidir com as variáveis do Render.
-Usa o ID real do PDV e a etapa correspondente a cada evento.
+Use outro número de celular como cliente:
 
-Dentro das 24 horas após a última mensagem do cliente, as respostas e os avisos
-podem usar texto livre. Fora dessa janela, os avisos de pedido usam o modelo.
-Sem modelo, ficam bloqueados, com o motivo no histórico. Depois de aprovar e
-configurar o modelo, use **Tentar novamente** nas mensagens bloqueadas pertinentes.
-Modelos diferentes, com parâmetros nomeados ou componentes adicionais, exigem
-adaptação do código antes de enviar.
+1. Envie `Olá` e confira o menu automático. Teste `1`, `3` e `4`.
+2. Pelo cardápio, finalize um pedido informando o número desse cliente e marcando
+   **Quero receber avisos deste pedido no WhatsApp**.
+3. Envie `2` no WhatsApp. O robô deve consultar apenas pedidos do número remetente.
+4. No PDV, mova o pedido para **Pronto** e **A caminho**. Confira os avisos no
+   celular do cliente e atualize o histórico de mensagens.
+5. Envie `ATENDENTE`, responda pelo PDV e confirme a pausa do robô. Use `MENU`
+   para retornar. A pausa permite atendimento pela equipe também no aplicativo.
+6. Envie `PARAR` e confira que as novas etapas não geram avisos. Use `ATIVAR
+   AVISOS` para autorizar novamente os pedidos ativos.
 
-## 6. Teste de ativação
+Não foi enviado nenhum WhatsApp real nos testes de desenvolvimento. O pareamento
+real, a estabilidade do número e a entrega precisam desse teste na conta da loja.
 
-1. Abra o PDV, entre na gestão e vá a **Integrações**. Confira a configuração e a
-   data de verificação do webhook.
-2. Pelo celular de um cliente de teste autorizado, envie `Olá` para o número da
-   API. Confira as opções e responda `1`, `3` e `4`.
-3. Finalize um pedido no cardápio com o mesmo número de WhatsApp e marque a
-   autorização de avisos. Envie `2` no WhatsApp e confira o pedido correto.
-4. No PDV, mova o pedido para **Pronto** e **A caminho**. Confira o recebimento no
-   celular e o histórico de envio; atualize o painel para ver entrega e leitura.
-5. Envie `ATENDENTE`, responda pelo PDV e confirme que o robô fica pausado. Envie
-   `MENU` para voltar.
-6. Envie `PARAR` e confira que as próximas etapas não geram novos avisos. Para
-   testar fora de 24 horas, use um destinatário com autorização e modelo aprovado.
+## Eventos e proteção de dados
 
-## Operação e falhas
+O PDV configura automaticamente o webhook:
 
-A fila fica no mesmo SQLite privado, em disco persistente, e é consumida pelo
-worker do servidor. Os avisos entram na fila na mesma transação do pedido ou da
-mudança de etapa. Uma falha na Meta não cancela o pedido nem altera caixa ou estoque.
-Webhooks repetidos não geram novas respostas; uma etapa repetida não duplica avisos.
-Eventos de mensagem anteriores à janela de atendimento não provocam resposta.
+`https://sahara-esfihas-pdv.onrender.com/api/whatsapp/evolution/webhook`
 
-Rejeições HTTP 429 recebem até cinco tentativas com espera crescente. Erros de
-configuração ou entrega ficam visíveis para correção e reenvio manual. Falhas de
-rede, HTTP 5xx e reinício durante envio podem deixar o resultado incerto: confira
-a conversa e a Meta antes de enviar outra mensagem, para evitar duplicidade.
-Mensagens sem confirmação não têm reenvio automático.
+Ele usa `X-Sahara-Webhook-Secret`, com o segredo privado do Render, e aceita
+somente a instância configurada. `byEvents=false`, `base64=false`, e eventos:
+`MESSAGES_UPSERT`, `MESSAGES_UPDATE`, `CONNECTION_UPDATE`.
 
-Desligar a integração preserva a fila, mas não gera avisos novos durante a pausa.
-Pedidos sem telefone ou autorização não recebem avisos. O sistema não faz envio
-retroativo de todos os pedidos antigos ao ativar. Os webhooks de WhatsApp têm limite
-de 64 KiB por evento; eventos maiores precisam de revisão do limite antes do uso.
+A identidade do cliente vem do endereço telefônico da sessão. IDs `@lid` só
+podem ser usados quando o evento fornece também o endereço telefônico
+`remoteJidAlt`; um LID isolado não é tratado como telefone. A consulta não
+confia no telefone escrito no texto da mensagem. Mensagens repetidas não
+provocam novas respostas, e confirmações fora de ordem não reduzem o estado
+já confirmado de entrega ou leitura.
 
-## Verificação local
+## Fila, reconexão e falhas
+
+A fila fica no disco SQLite privado do PDV. O servidor só consome a fila
+Evolution quando a conexão foi confirmada como `open` por evento autenticado
+ou consulta à API. Enquanto desconectada, as mensagens ficam pendentes.
+Os eventos de pedidos e seus avisos são gravados na mesma transação.
+
+Falhas de rede, respostas ambíguas e reinício durante envio podem deixar um
+resultado **Sem confirmação**. Confira a conversa antes de enviar outra mensagem;
+nesses casos não há reenvio automático. HTTP 429 tem até cinco tentativas com
+espera crescente. Falhas explícitas têm reenvio manual após corrigir a causa.
+
+`SAHARA_WHATSAPP_ENABLED=0` pausa envios e respostas e não gera novos avisos
+nas mudanças de etapa. A fila existente é preservada. Ao reconectar, revise
+mensagens pendentes para não surpreender clientes com avisos antigos.
+
+As mensagens da fila são associadas ao provedor que as criou. Trocar entre Meta
+e Evolution não transfere mensagens pendentes de uma conexão para outra.
+Os avisos já autorizados de clientes que enviarem `PARAR` são descartados antes
+de enviar. Campanhas não são disparadas por esta integração.
+
+O limite do PDV é 64 KiB por evento; o webhook é configurado sem mídias em
+base64. Mensagens maiores exigem revisar o limite antes de uso.
+
+## Verificação de desenvolvimento
 
 ```sh
 python -m unittest discover -s server/tests -v
@@ -142,8 +193,12 @@ node tests/admin.spec.cjs
 node tests/ordering.spec.cjs
 ```
 
-Os testes de WhatsApp simulam o transporte; não enviam mensagens nem comprovam
-autorização da conta Meta. O teste real exige configurar e ativar o número.
+Os testes de transporte e pareamento são simulados, sem número real conectado.
+O Blueprint foi validado com o schema oficial do Render; o serviço não foi
+implantado nesta sessão. A imagem indicada foi confirmada no registro, mas
+não foi executada neste ambiente. Atualizações futuras da Evolution/Baileys ou
+do WhatsApp podem exigir manutenção.
 
-Referências oficiais: [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api/),
-[validação de webhooks da Meta](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/webhooks/start/).
+Referências: [Evolution API](https://github.com/evolution-foundation/evolution-api),
+[versão 2.3.7](https://github.com/evolution-foundation/evolution-api/releases/tag/2.3.7),
+[Blueprints do Render](https://render.com/docs/blueprint-spec).
