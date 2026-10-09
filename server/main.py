@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, model_validator
 
-from . import core, whatsapp
+from . import core, whatsapp, whatsapp_ai
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
 
 class Model(BaseModel):
@@ -171,7 +171,6 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     @app.get('/api/integrations')
     def integrations():
         entries = [
-            ('ai', 'Atendimento com inteligência artificial', 'Conectar um provedor de IA e o canal de atendimento.'),
             ('payments', 'Pagamento online com cartão e Pix', 'Conectar provedor de pagamentos e confirmação por webhook.'),
             ('fiscal', 'Emissão de notas fiscais', 'Configurar dados fiscais e um emissor autorizado.'),
             ('ifood', 'iFood e Entrega Fácil', 'Habilitar acesso à API da conta da loja no iFood.'),
@@ -180,7 +179,11 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             ('printers', 'Impressão automática em múltiplas impressoras', 'Conectar as impressoras e uma ponte local de impressão. A comanda pode ser impressa pelo navegador.'),
             ('recovery', 'Recuperação automática de carrinho', 'Conectar mensagens oficiais e identificação consentida de clientes.')
         ]
-        return {'integrations': [whatsapp.availability()] + [{'id': key, 'label': label, 'available': False, 'reason': reason} for key, label, reason in entries]}
+        ai_ready = whatsapp.config()['ready'] and whatsapp_ai.config()['ready']
+        ai_entry = {'id': 'ai', 'label': 'Atendimento com inteligência artificial para delivery', 'available': ai_ready,
+                    'reason': 'Gemini configurado. Confira as respostas e o consumo na área de WhatsApp.' if ai_ready else
+                    'Ative SAHARA_AI_ENABLED=1 e configure SAHARA_AI_API_KEY no PDV para usar a cota gratuita do Gemini. O atendimento básico continua disponível.'}
+        return {'integrations': [whatsapp.availability(), ai_entry] + [{'id': key, 'label': label, 'available': False, 'reason': reason} for key, label, reason in entries]}
 
     @app.post('/api/admin/login')
     def login(body: Login, request: Request, response: Response):

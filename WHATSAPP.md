@@ -12,6 +12,9 @@ novo pareamento e manutenção quando o WhatsApp mudar.
 
 ## O que está disponível
 
+O robô também pode interpretar dúvidas de delivery com a cota gratuita do Gemini.
+A ativação é opcional e está descrita em [WHATSAPP-IA.md](WHATSAPP-IA.md).
+
 - **Integrações → WhatsApp da Sahara → Gerar QR Code**: cria a instância quando
   necessário, configura os eventos e mostra o QR Code no painel privado.
 - Consulta real da conexão: conectado, desconectado, aguardando pareamento ou

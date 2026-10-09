@@ -15,7 +15,8 @@ const fixture = {
   provider: 'evolution', configured: false, enabled: false,
   connection: { state: 'not_configured', connected: false, error: '' },
   missing: ['SAHARA_EVOLUTION_URL', 'SAHARA_EVOLUTION_API_KEY', 'SAHARA_EVOLUTION_INSTANCE', 'SAHARA_EVOLUTION_WEBHOOK_SECRET'],
-  last_webhook_at: '', messages: [], conversations: []
+  last_webhook_at: '', messages: [], conversations: [],
+  ai: { enabled: false, configured: false, provider: 'gemini', model: 'gemini-2.5-flash-lite', daily_limit: 50, used_today: 0, last_result: null, missing: ['SAHARA_AI_API_KEY'] }
 };
 let server, browser, context, page, baseURL, authorized = false;
 let dashboard = structuredClone(fixture), dashboardWait, dashboardError, connectResult, connectError, connectWait, ordersWait, partialBody, partialResponse;
@@ -116,8 +117,8 @@ async function run() {
     assert.equal(await page.getByRole('button', { name: 'Gerar QR Code', exact: true }).isDisabled(), true);
     assert.equal(await page.locator('.whatsapp-pairing img').count(), 0);
     assert.equal(await page.locator('#screen input[type="password"]').count(), 0);
-    await page.locator('.whatsapp-setup summary').click();
-    assert.match(await page.locator('.whatsapp-setup').innerText(), /Instale a Evolution API/);
+    await page.locator('.whatsapp-setup:not(.whatsapp-ai-setup) summary').click();
+    assert.match(await page.locator('.whatsapp-setup:not(.whatsapp-ai-setup)').innerText(), /Instale a Evolution API/);
     assert.deepEqual(await page.locator('.whatsapp-missing code').allTextContents(), fixture.missing);
     assert.equal(requests.filter(request => request.endpoint.endsWith('/whatsapp/connect')).length, 0);
     await capture('pending-desktop');
@@ -206,7 +207,8 @@ async function run() {
     for (const width of [350, 390, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       dashboard = structuredClone(fixture); await render();
-      await page.locator('.whatsapp-setup summary').click();
+      await page.locator('.whatsapp-setup:not(.whatsapp-ai-setup) summary').click();
+      await page.locator('.whatsapp-ai-setup summary').click();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `Pending setup overflows at ${width}`);
       dashboard = { ...dashboard, configured: true, enabled: true, connection: { state: 'close', connected: false, error: '' }, missing: [] };
       await render(); connectResult = { state: 'connecting', connected: false, qrcode: png }; await pair();
@@ -215,6 +217,25 @@ async function run() {
       const box = await page.locator('.whatsapp-pairing img').boundingBox(); assert.ok(box.width <= width - 36);
       await capture(`qr-${width}`);
     }
+  });
+  await check('Delivery AI setup exposes guidance without secrets and never claims a verified provider connection', async () => {
+    dashboard = structuredClone(fixture); await render();
+    await page.getByText('IA para delivery: Aguardando ativação', { exact: true }).waitFor();
+    await page.locator('.whatsapp-ai-setup summary').click();
+    assert.match(await page.locator('.whatsapp-ai-setup').innerText(), /SAHARA_AI_API_KEY/);
+    assert.match(await page.locator('.whatsapp-ai-setup').innerText(), /sem ativar cobrança/);
+    assert.equal(await page.getByRole('link', { name: 'Criar chave no Google AI Studio' }).getAttribute('href'), 'https://aistudio.google.com/api-keys');
+    assert.equal(await page.locator('#screen input[type="password"]').count(), 0);
+    dashboard.ai = { ...dashboard.ai, enabled: true, configured: true, used_today: 50, last_result: { status: 'fallback', reason: 'limit' } };
+    await render();
+    await page.getByText('IA para delivery: Configuração presente', { exact: true }).waitFor();
+    await page.getByText(/Consultas de IA hoje: 50 de 50/).waitFor();
+    await page.getByText('Limite de IA atingido. O atendimento básico continua funcionando.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.whatsapp-ai-setup').count(), 0);
+    dashboard.ai.last_result = { status: 'done', reason: '' }; await render();
+    await page.getByText('Última consulta de IA: concluída.', { exact: true }).waitFor();
+    dashboard = { ...structuredClone(fixture), configured: true, enabled: true, missing: [], connection: { state: 'close', connected: false, error: '' } };
+    await render();
   });
   await check('A stalled WhatsApp check leaves other integrations visible and times out with a local retry', async () => {
     let release; dashboardWait = new Promise(resolve => { release = resolve; });

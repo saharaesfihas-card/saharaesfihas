@@ -677,7 +677,7 @@
     if (!integrations.length) p.append(el('p', 'Nenhuma integração informada pelo servidor.', 'empty'));
     for (const integration of integrations) {
       const item = el('article', undefined, 'integration'); const heading = el('h3', integration.label || integration.id);
-      heading.append(badge(integration.available ? (integration.id === 'whatsapp' ? 'Configurada' : 'Disponível') : 'Ativação pendente', integration.available ? 'success' : 'warning'));
+      heading.append(badge(integration.available ? (['whatsapp', 'ai'].includes(integration.id) ? 'Configurada' : 'Disponível') : 'Ativação pendente', integration.available ? 'success' : 'warning'));
       item.append(heading, el('p', integration.reason || 'Consulte a configuração do serviço.')); p.append(item);
     }
     const section = el('div', undefined, 'whatsapp-section');
@@ -725,6 +725,24 @@
         guide.append(keys);
       }
       setup.append(guide);
+    }
+    if (data.ai) {
+      const ai = data.ai;
+      const status = el('p', `IA para delivery: ${ai.configured ? 'Configuração presente' : 'Aguardando ativação'}`);
+      status.setAttribute('role', 'status'); setup.append(status);
+      setup.append(el('p', 'A IA interpreta dúvidas e sugere opções do cardápio. Preços e informações dos pedidos vêm do PDV. Novos pedidos são finalizados no cardápio.', 'help'));
+      if (ai.configured) {
+        setup.append(el('p', `Consultas de IA hoje: ${numeric(ai.used_today)} de ${numeric(ai.daily_limit)}. A cota gratuita do Google pode ter limites adicionais.`, 'help'));
+        const last = ai.last_result;
+        if (last?.status === 'done') setup.append(el('p', 'Última consulta de IA: concluída.', 'help'));
+        if (last?.status === 'fallback') setup.append(el('p', last.reason === 'limit' ? 'Limite de IA atingido. O atendimento básico continua funcionando.' : 'Na última consulta, o atendimento básico foi utilizado. Confira a chave e a disponibilidade da IA.', 'help'));
+      } else {
+        const guide = el('details', undefined, 'whatsapp-setup whatsapp-ai-setup'); guide.append(el('summary', 'Ativar IA com a cota gratuita do Gemini'));
+        const steps = el('ol');
+        steps.append(el('li', 'Crie uma chave no Google AI Studio em um projeto com plano gratuito, sem ativar cobrança.'), el('li', 'No Environment do serviço sahara-esfihas-pdv, configure SAHARA_AI_API_KEY com a chave privada e SAHARA_AI_ENABLED=1. Salve e faça o deploy do PDV.'), el('li', 'Atualize esta tela. A IA usa um limite local inicial de 50 consultas por dia; se a cota acabar, o atendimento básico continua funcionando.'));
+        const link = el('a', 'Criar chave no Google AI Studio'); link.href = 'https://aistudio.google.com/api-keys'; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        guide.append(steps, link); setup.append(guide);
+      }
     }
     if (byQR) {
       const statuses = { open: 'Conectado', close: 'Desconectado', connecting: 'Aguardando conexão pelo celular', not_created: 'Pronto para criar a conexão', not_configured: 'Configuração pendente', unavailable: 'Serviço indisponível', wrong_number: 'Número conectado diferente do WhatsApp da loja' };

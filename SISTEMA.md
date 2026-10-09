@@ -12,6 +12,7 @@ O [painel do PDV](https://sahara-esfihas-pdv.onrender.com/admin.html) e a API es
 | Endereço e localização | Endereço manual ou ponto de localização conferido e confirmado pelo cliente; o número da casa continua obrigatório. |
 | Ajuda no cardápio | Respostas locais sobre produtos, horário, entrega e como pedir. Não é um chatbot com IA nem atende conversas no WhatsApp. |
 | WhatsApp | Conector Evolution API por QR Code, menu de atendimento, consulta do próprio pedido, atendimento pela equipe e avisos das etapas para clientes que autorizaram. A ativação exige servidor Evolution, credenciais e pareamento do número. |
+| IA para delivery no WhatsApp | Integração opcional com Gemini para interpretar dúvidas e sugerir produtos. O servidor monta as respostas com dados reais; ativação exige chave do Google AI Studio e cota gratuita disponível. Atendimento básico continua se a IA falhar ou atingir limites. |
 | Pedidos, PDV e cozinha | Registro persistente de pedidos, histórico e etapas operadas pela loja. O PDV também registra pedidos recebidos por telefone ou WhatsApp. |
 | Estoque | Itens, entradas, saídas e indicação de reposição no painel. A API também permite cadastrar fichas técnicas; a entrada do pedido em preparo consome o estoque configurado. Produtos sem vínculo de estoque não têm disponibilidade controlada. |
 | Caixa e fiado | Abertura, fechamento, movimentações, registro manual de pagamento e recebimentos de fiado. Registrar um recebimento não realiza uma cobrança online. |
@@ -34,7 +35,7 @@ Os avisos dependem da autorização específica do cliente, que pode ser marcada
 
 As demais integrações continuam **pendentes**, com o motivo de cada pendência:
 
-- atendimento com IA e envio de campanhas;
+- envio de campanhas;
 - pagamento online com cartão ou Pix e confirmação por webhook;
 - emissão fiscal;
 - iFood, Entrega Fácil e F360;

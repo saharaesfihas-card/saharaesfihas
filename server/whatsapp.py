@@ -20,7 +20,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .core import db, require_admin, utcnow
-from . import evolution
+from . import evolution, whatsapp_ai
 
 router = APIRouter()
 LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo',
@@ -159,6 +159,7 @@ def initialize(conn):
     columns = {row[1] for row in conn.execute('PRAGMA table_info(whatsapp_outbox)')}
     if 'provider' not in columns:
         conn.execute("ALTER TABLE whatsapp_outbox ADD COLUMN provider TEXT NOT NULL DEFAULT 'meta'")
+    whatsapp_ai.initialize(conn)
 
 
 def setting(conn, key, default=''):
@@ -194,7 +195,7 @@ def normalize(text):
     return ''.join(c for c in unicodedata.normalize('NFKD', text.lower()) if not unicodedata.combining(c)).strip()
 
 
-def answer(conn, recipient, text):
+def answer(conn, recipient, text, allow_ai=False):
     normalized = normalize(text)
     now = int(time.time())
     if normalized in ('parar', 'sair', 'stop', 'cancelar avisos'):
@@ -209,7 +210,7 @@ def answer(conn, recipient, text):
         placeholders = ','.join('?' for _ in aliases)
         conn.execute(f"UPDATE orders SET whatsapp_opt_in=1 WHERE customer_phone IN ({placeholders}) AND status NOT IN ('delivered','cancelled')", aliases)
         return 'Avisos dos seus pedidos ativos autorizados. Para desativar, envie PARAR.'
-    if normalized in ('5', 'atendente', 'humano') or re.search(r'\b(atendente|humano|reclamacao)\b', normalized):
+    if normalized in ('5', 'atendente', 'humano') or re.search(r'\b(atendente|humano|reclamacao)\b', normalized) or (allow_ai and re.search(r'\b(alergia|alergico|alergica|gluten|lactose|ingredientes|intolerancia|restricao alimentar)\b', normalized)):
         update_contact_identity(conn, recipient, 'human_until', now + 86400)
         return 'Sua conversa ficou disponível para a equipe no PDV. O atendimento automático está pausado. Atendemos de segunda a domingo, das 18h às 23h. Para voltar ao menu automático, envie MENU.'
     contact = contact_identity(conn, recipient)
@@ -221,7 +222,8 @@ def answer(conn, recipient, text):
         return 'Atendemos somente por delivery, de segunda a domingo, das 18h às 23h, no horário de Maringá.'
     if normalized == '4' or re.search(r'\b(pix|pagamento|pagar|cartao|dinheiro)\b', normalized):
         return 'Aceitamos Pix, dinheiro, cartão de crédito e débito. Os dados do Pix e a confirmação do pagamento são combinados com a equipe. Envie ATENDENTE para falar com a loja.'
-    if normalized == '2' or re.search(r'\b(status|pedido|solicitacao|andamento)\b', normalized):
+    new_request = allow_ai and re.search(r'\b(novo pedido|(?:fazer|montar|criar|fechar)\s+(?:um |meu |o )?pedido)\b', normalized)
+    if not new_request and (normalized == '2' or re.search(r'\b(status|pedido|solicitacao|andamento)\b', normalized)):
         # Nunca confia no número ou ID escritos no texto: a identidade vem do webhook assinado.
         matches = re.findall(r'\b[0-9a-f]{32}\b', normalized)
         aliases = order_phone_aliases(recipient)
@@ -232,10 +234,20 @@ def answer(conn, recipient, text):
         if order:
             return f"Seu pedido #{order['id']} está {LABELS.get(order['status'], order['status'])}. Para dúvidas ou alterações, envie ATENDENTE. Para autorizar avisos de andamento, envie ATIVAR AVISOS."
         return 'Não encontrei um pedido associado ao seu número de WhatsApp. Informe esse número ao finalizar no cardápio ou envie ATENDENTE.'
+    if allow_ai and normalized not in ('1', 'menu', 'oi', 'ola', 'bom dia', 'boa tarde', 'boa noite'):
+        return whatsapp_ai.PENDING
     if normalized == '1' or re.search(r'\b(cardapio|comprar|esfiha|shawarma|pedir)\b', normalized):
         return 'Escolha os produtos e finalize seu pedido no cardápio: ' + config()['menu'] + '\nO pedido é registrado no PDV pelo cardápio. Para atendimento pela equipe, envie ATENDENTE.'
     return ('Olá! Sou o atendimento automático da Sahara.\n1 — Cardápio e novo pedido\n2 — Consultar meu pedido\n'
             '3 — Horários\n4 — Pagamentos\n5 — Falar com a equipe\nResponda com o número da opção. Para desativar avisos, envie PARAR.')
+
+
+def respond_to_inbound(conn, identifier, recipient, text):
+    reply = answer(conn, recipient, text, allow_ai=whatsapp_ai.config()['ready']) if text else answer(conn, recipient, 'atendente')
+    if reply is whatsapp_ai.PENDING:
+        whatsapp_ai.enqueue(conn, identifier, recipient, config()['provider'])
+    elif reply:
+        queue(conn, 'reply:' + identifier, recipient, 'reply', reply)
 
 
 @router.get('/api/whatsapp/webhook')
@@ -303,9 +315,7 @@ async def receive(request: Request):
                         # Eventos antigos são arquivados, sem reabrir a janela de atendimento.
                         if timestamp < int(time.time()) - 86400:
                             continue
-                        reply = answer(conn, recipient, text) if text else answer(conn, recipient, 'atendente')
-                        if reply:
-                            queue(conn, 'reply:' + key, recipient, 'reply', reply)
+                        respond_to_inbound(conn, key, recipient, text)
             put_setting(conn, 'last_webhook_at', utcnow())
     except (ValueError, TypeError, AttributeError, KeyError):
         raise HTTPException(400, 'Evento inválido.') from None
@@ -386,9 +396,7 @@ async def evolution_webhook(request: Request):
                     conn.execute('INSERT INTO whatsapp_contacts(phone,last_inbound) VALUES(?,?) ON CONFLICT(phone) DO UPDATE SET last_inbound=MAX(last_inbound,excluded.last_inbound)', (recipient, timestamp))
                     if timestamp < int(time.time()) - 86400:
                         continue  # Não responde ao histórico antigo sincronizado ao parear.
-                    reply = answer(conn, recipient, text) if text else answer(conn, recipient, 'atendente')
-                    if reply:
-                        queue(conn, 'reply:' + identifier, recipient, 'reply', reply)
+                    respond_to_inbound(conn, identifier, recipient, text)
             put_setting(conn, 'evolution_last_webhook_at', utcnow())
     except (ValueError, TypeError, AttributeError, KeyError, RecursionError):
         raise HTTPException(400, 'Evento inválido.') from None
@@ -429,6 +437,10 @@ def connect_evolution(request: Request):
 
 def payload(conn, row, cfg):
     contact = contact_identity(conn, row['phone'])
+    if row['kind'] == 'ai_reply' and contact and contact['human_until'] > int(time.time()):
+        return None, 'skipped', 'Atendimento automático pausado para a equipe.'
+    if row['kind'] == 'ai_reply' and int(time.time()) - datetime.fromisoformat(row['created_at']).timestamp() > 86400:
+        return None, 'skipped', 'Resposta de IA expirada.'
     if row['kind'] == 'order':
         order = conn.execute('SELECT whatsapp_opt_in,status FROM orders WHERE id=?', (row['order_id'],)).fetchone()
         if not order or not order['whatsapp_opt_in'] or (contact and contact['opted_out']):
@@ -514,11 +526,14 @@ async def lifespan(app):
         while not stop.is_set():
             try:
                 pending = process_one(app)
+                if not pending:
+                    pending = whatsapp_ai.process_one(app)
             except Exception:
                 pending = False  # Mantém a fila no disco; sem publicar dados em logs.
             stop.wait(0.2 if pending else 2)
     with db(SimpleNamespace(app=app)) as conn:
         conn.execute("UPDATE whatsapp_outbox SET status='uncertain',error='Servidor reiniciado durante envio; confira a conversa.',updated_at=? WHERE status='sending'", (utcnow(),))
+        whatsapp_ai.recover(conn)
     thread = threading.Thread(target=worker, name='sahara-whatsapp', daemon=True)
     thread.start()
     try:
@@ -541,7 +556,7 @@ def dashboard(request: Request):
     cfg = config()
     connection = evolution_status(request, cfg) if cfg['provider'] == 'evolution' else None
     with db(request) as conn:
-        return {'provider': cfg['provider'], 'connection': connection, 'configured': cfg['ready'], 'enabled': cfg['enabled'], 'template_configured': bool(cfg['template']),
+        return {'provider': cfg['provider'], 'connection': connection, 'configured': cfg['ready'], 'enabled': cfg['enabled'], 'template_configured': bool(cfg['template']), 'ai': whatsapp_ai.dashboard(conn),
                 'webhook_path': '/api/whatsapp/evolution/webhook' if cfg['provider'] == 'evolution' else '/api/whatsapp/webhook',
                 'webhook_verified_at': setting(conn, 'webhook_verified_at') if cfg['provider'] == 'meta' else '',
                 'last_webhook_at': setting(conn, 'evolution_last_webhook_at' if cfg['provider'] == 'evolution' else 'last_webhook_at'),
