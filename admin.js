@@ -681,7 +681,15 @@
       item.append(heading, el('p', integration.reason || 'Consulte a configuração do serviço.')); p.append(item);
     }
     const section = el('div', undefined, 'whatsapp-section');
-    screen.append(p, section);
+    const aiPanel = panel('Inteligência artificial no WhatsApp', 'Verifique a configuração do Gemini para o atendimento da loja.');
+    const aiCheck = el('p', 'Toque em Verificar IA para conferir a chave e o modelo.', 'help');
+    aiCheck.setAttribute('role', 'status'); aiCheck.setAttribute('aria-live', 'polite');
+    aiPanel.append(button('Verificar IA', async () => {
+      aiCheck.textContent = 'Verificando a chave e o modelo do Gemini…';
+      try { const result = await api('/admin/whatsapp/ai/check', { method: 'POST', body: {} }); aiCheck.textContent = result.message; }
+      catch (error) { aiCheck.textContent = error.message; throw error; }
+    }), aiCheck, el('p', 'Esta verificação consulta apenas a configuração do modelo. Não gera conteúdo nem envia mensagens no WhatsApp.', 'help'));
+    screen.append(aiPanel, p, section);
     void loadWhatsAppSection(section, generation);
   }
 
@@ -736,12 +744,6 @@
         const last = ai.last_result;
         if (last?.status === 'done') setup.append(el('p', 'Última consulta de IA: concluída.', 'help'));
         if (last?.status === 'fallback') setup.append(el('p', last.message || (last.reason === 'limit' ? 'Limite de IA atingido. O atendimento básico continua funcionando.' : 'Na última consulta, o atendimento básico foi utilizado. Confira a chave e a disponibilidade da IA.'), 'help'));
-        const check = el('p', ai.check?.message || 'A chave está cadastrada, mas ainda não foi verificada com o Google.', 'help'); check.setAttribute('role', 'status');
-        setup.append(button('Verificar IA', async () => {
-          check.textContent = 'Verificando a chave e o modelo do Gemini…';
-          try { const result = await api('/admin/whatsapp/ai/check', { method: 'POST', body: {} }); check.textContent = result.message; }
-          catch (error) { check.textContent = error.message; throw error; }
-        }), check, el('p', 'Esta verificação consulta apenas a configuração do modelo. Não gera conteúdo nem envia mensagens no WhatsApp.', 'help'));
       } else {
         const guide = el('details', undefined, 'whatsapp-setup whatsapp-ai-setup'); guide.append(el('summary', 'Ativar IA com a cota gratuita do Gemini'));
         const steps = el('ol');

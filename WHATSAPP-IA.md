@@ -92,7 +92,9 @@ A verificação real exige ativação pelo proprietário e uma mensagem de teste
 
 ## Se receber apenas o menu básico
 
-No PDV, abra **Integrações → WhatsApp da Sahara → Verificar IA**. O servidor
+No PDV, abra **Integrações → Inteligência artificial no WhatsApp → Verificar IA**.
+O botão fica no início da tela, inclusive quando a IA ainda não está configurada
+ou a conexão com a Evolution não pode ser consultada. O servidor
 consulta apenas os metadados do modelo, sem gerar conteúdo, enviar WhatsApp ou
 registrar uso na cota local de geração. A verificação exige sessão administrativa
 e proteção CSRF. Ela informa se a chave foi recusada, não possui permissões,

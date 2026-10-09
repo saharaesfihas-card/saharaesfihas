@@ -230,6 +230,10 @@ async function run() {
     assert.match(await page.locator('.whatsapp-ai-setup').innerText(), /sem ativar cobrança/);
     assert.equal(await page.getByRole('link', { name: 'Criar chave no Google AI Studio' }).getAttribute('href'), 'https://aistudio.google.com/api-keys');
     assert.equal(await page.locator('#screen input[type="password"]').count(), 0);
+    aiCheck = { state: 'missing_key', message: 'Falta SAHARA_AI_API_KEY no serviço do PDV. Use a chave gerada pelo Google AI Studio.' };
+    await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
+    await page.getByText(aiCheck.message, { exact: true }).waitFor();
+    aiCheck = { state: 'available', message: 'Chave e modelo acessíveis. Envie uma pergunta para confirmar uma resposta real da IA.' };
     dashboard.ai = { ...dashboard.ai, enabled: true, configured: true, used_today: 50, last_result: { status: 'fallback', reason: 'limit' } };
     await render();
     await page.getByText('IA para delivery: Configuração presente', { exact: true }).waitFor();
@@ -238,7 +242,7 @@ async function run() {
     assert.equal(await page.locator('.whatsapp-ai-setup').count(), 0);
     dashboard.ai.last_result = { status: 'done', reason: '' }; await render();
     await page.getByText('Última consulta de IA: concluída.', { exact: true }).waitFor();
-    await page.getByText('A chave está cadastrada, mas ainda não foi verificada com o Google.', { exact: true }).waitFor();
+    await page.getByText('Toque em Verificar IA para conferir a chave e o modelo.', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
     await page.getByText(aiCheck.message, { exact: true }).waitFor();
     aiCheck = { state: 'authentication', message: 'O Google recusou a chave da IA. Copie a chave gerada no Google AI Studio para SAHARA_AI_API_KEY no PDV; uma senha escolhida não funciona.' };
@@ -248,6 +252,18 @@ async function run() {
     dashboard = { ...structuredClone(fixture), configured: true, enabled: true, missing: [], connection: { state: 'close', connected: false, error: '' } };
     await render();
   });
+  await check('AI verification remains visible when the WhatsApp dashboard has no AI status', async () => {
+    const savedAI = dashboard.ai;
+    delete dashboard.ai;
+    await render();
+    assert.equal(await page.getByRole('button', { name: 'Verificar IA', exact: true }).count(), 1);
+    assert.equal(await page.locator('#screen > .panel').first().getByRole('heading', { name: 'Inteligência artificial no WhatsApp', exact: true }).count(), 1);
+    aiCheck = { state: 'disabled', message: 'A IA está desativada. Configure SAHARA_AI_ENABLED=1 no PDV para ativar.' };
+    await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
+    await page.getByText(aiCheck.message, { exact: true }).waitFor();
+    dashboard.ai = savedAI;
+    aiCheck = { state: 'available', message: 'Chave e modelo acessíveis. Envie uma pergunta para confirmar uma resposta real da IA.' };
+  });
   await check('A stalled WhatsApp check leaves other integrations visible and times out with a local retry', async () => {
     let release; dashboardWait = new Promise(resolve => { release = resolve; });
     const request = page.waitForRequest(request => request.url().endsWith('/api/admin/whatsapp'));
@@ -255,6 +271,9 @@ async function run() {
       await render(false); await request;
       await page.getByRole('heading', { name: 'Disponibilidade dos serviços', exact: true }).waitFor();
       await page.getByText('Consultando a conexão do WhatsApp…', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('button', { name: 'Verificar IA', exact: true }).isEnabled(), true);
+      await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
+      await page.getByText(aiCheck.message, { exact: true }).waitFor();
       await page.clock.fastForward(35001);
       await page.getByRole('heading', { name: 'Não foi possível carregar o WhatsApp', exact: true }).waitFor();
       await page.getByText('O servidor demorou para responder. Confira sua conexão e tente novamente.', { exact: true }).waitFor();
@@ -271,6 +290,8 @@ async function run() {
     await page.getByRole('heading', { name: 'Não foi possível carregar o WhatsApp', exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Disponibilidade dos serviços', exact: true }).waitFor();
     await page.getByText(dashboardError, { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
+    await page.getByText(aiCheck.message, { exact: true }).waitFor();
     dashboardError = null;
     await page.getByRole('button', { name: 'Tentar novamente', exact: true }).click();
     await page.locator('.whatsapp-section[aria-busy="false"]').waitFor();
