@@ -90,5 +90,21 @@ Os testes usam respostas simuladas do Gemini e uma base privada temporária.
 Não usam uma chave real, não consomem cota e não enviam mensagens no WhatsApp.
 A verificação real exige ativação pelo proprietário e uma mensagem de teste.
 
+## Se receber apenas o menu básico
+
+No PDV, abra **Integrações → WhatsApp da Sahara → Verificar IA**. O servidor
+consulta apenas os metadados do modelo, sem gerar conteúdo, enviar WhatsApp ou
+registrar uso na cota local de geração. A verificação exige sessão administrativa
+e proteção CSRF. Ela informa se a chave foi recusada, não possui permissões,
+se a API está desativada, o modelo não está disponível, a cota foi recusada ou a
+rede falhou. Uma verificação aprovada confirma acesso à chave/modelo; a resposta
+real ainda precisa ser confirmada por uma pergunta do cliente.
+
+Resultados são invalidados quando a chave ou a ativação muda. O resultado da
+última consulta também mostra o motivo específico do atendimento básico, sem
+exibir a resposta bruta do Google nem valores secretos. HTTP 400 com
+`API_KEY_INVALID` identifica chave inválida; HTTP 429 identifica limite de cota.
+Não ative cobrança para resolver uma cota gratuita indisponível.
+
 Referências: [SDK oficial](https://github.com/googleapis/python-genai),
 [respostas estruturadas](https://ai.google.dev/gemini-api/docs/structured-output).

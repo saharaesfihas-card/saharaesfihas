@@ -22,6 +22,7 @@ let server, browser, context, page, baseURL, authorized = false;
 let dashboard = structuredClone(fixture), dashboardWait, dashboardError, connectResult, connectError, connectWait, ordersWait, partialBody, partialResponse;
 const requests = [], errors = [], external = [];
 let checks = 0;
+let aiCheck = { state: 'available', message: 'Chave e modelo acessíveis. Envie uma pergunta para confirmar uma resposta real da IA.' };
 
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
 async function render(waitWhatsApp = true) {
@@ -87,6 +88,9 @@ async function start() {
       return reply(dashboard);
     }
     if (method !== 'GET') assert.equal(request.headers()['x-sahara-csrf'], csrf, `${endpoint} must use the authenticated CSRF token`);
+    if (endpoint === '/api/admin/whatsapp/ai/check') {
+      assert.equal(method, 'POST'); assert.deepEqual(data, {}); return reply(aiCheck);
+    }
     if (endpoint === '/api/admin/whatsapp/connect') {
       assert.equal(method, 'POST'); assert.deepEqual(data, {});
       if (connectWait) await connectWait;
@@ -234,6 +238,13 @@ async function run() {
     assert.equal(await page.locator('.whatsapp-ai-setup').count(), 0);
     dashboard.ai.last_result = { status: 'done', reason: '' }; await render();
     await page.getByText('Última consulta de IA: concluída.', { exact: true }).waitFor();
+    await page.getByText('A chave está cadastrada, mas ainda não foi verificada com o Google.', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
+    await page.getByText(aiCheck.message, { exact: true }).waitFor();
+    aiCheck = { state: 'authentication', message: 'O Google recusou a chave da IA. Copie a chave gerada no Google AI Studio para SAHARA_AI_API_KEY no PDV; uma senha escolhida não funciona.' };
+    await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
+    await page.getByText(aiCheck.message, { exact: true }).waitFor();
+    assert.equal(await page.locator('#screen input[type="password"]').count(), 0);
     dashboard = { ...structuredClone(fixture), configured: true, enabled: true, missing: [], connection: { state: 'close', connected: false, error: '' } };
     await render();
   });

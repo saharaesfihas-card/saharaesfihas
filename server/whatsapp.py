@@ -421,6 +421,11 @@ def evolution_status(request, cfg):
                 'Não foi possível consultar a Evolution API. Confira o serviço, a URL e a chave no Render.')}
 
 
+@router.post('/api/admin/whatsapp/ai/check', dependencies=[Depends(require_admin)])
+def check_ai(request: Request):
+    return whatsapp_ai.check_configuration(request)
+
+
 @router.post('/api/admin/whatsapp/connect', dependencies=[Depends(require_admin)])
 def connect_evolution(request: Request):
     cfg = config()

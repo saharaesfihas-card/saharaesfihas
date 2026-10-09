@@ -735,7 +735,13 @@
         setup.append(el('p', `Consultas de IA hoje: ${numeric(ai.used_today)} de ${numeric(ai.daily_limit)}. A cota gratuita do Google pode ter limites adicionais.`, 'help'));
         const last = ai.last_result;
         if (last?.status === 'done') setup.append(el('p', 'Última consulta de IA: concluída.', 'help'));
-        if (last?.status === 'fallback') setup.append(el('p', last.reason === 'limit' ? 'Limite de IA atingido. O atendimento básico continua funcionando.' : 'Na última consulta, o atendimento básico foi utilizado. Confira a chave e a disponibilidade da IA.', 'help'));
+        if (last?.status === 'fallback') setup.append(el('p', last.message || (last.reason === 'limit' ? 'Limite de IA atingido. O atendimento básico continua funcionando.' : 'Na última consulta, o atendimento básico foi utilizado. Confira a chave e a disponibilidade da IA.'), 'help'));
+        const check = el('p', ai.check?.message || 'A chave está cadastrada, mas ainda não foi verificada com o Google.', 'help'); check.setAttribute('role', 'status');
+        setup.append(button('Verificar IA', async () => {
+          check.textContent = 'Verificando a chave e o modelo do Gemini…';
+          try { const result = await api('/admin/whatsapp/ai/check', { method: 'POST', body: {} }); check.textContent = result.message; }
+          catch (error) { check.textContent = error.message; throw error; }
+        }), check, el('p', 'Esta verificação consulta apenas a configuração do modelo. Não gera conteúdo nem envia mensagens no WhatsApp.', 'help'));
       } else {
         const guide = el('details', undefined, 'whatsapp-setup whatsapp-ai-setup'); guide.append(el('summary', 'Ativar IA com a cota gratuita do Gemini'));
         const steps = el('ol');

@@ -147,7 +147,7 @@ class DeliveryAITests(unittest.TestCase):
         with patch.object(ai, 'interpret', side_effect=error) as model:
             self.assertTrue(ai.process_one(self.app)); self.assertFalse(ai.process_one(self.app))
             model.assert_called_once()
-        self.assertEqual(self.rows('whatsapp_ai_jobs')[0]['reason'], 'provider')
+        self.assertEqual(self.rows('whatsapp_ai_jobs')[0]['reason'], 'quota')
         self.assertNotIn('gemini-private-test', json.dumps(self.rows('whatsapp_outbox')))
         self.assertEqual(len(self.rows('whatsapp_ai_usage')), 1)
 
@@ -285,6 +285,74 @@ class DeliveryAITests(unittest.TestCase):
         with patch.object(ai, 'interpret', return_value={'intent': 'order_status', 'product_ids': []}):
             ai.process_one(self.app)
         self.assertIn('Não encontrei um pedido associado ao seu número', self.rows('whatsapp_outbox')[0]['body'])
+
+    def login(self):
+        response = self.client.post('/api/admin/login', json={'password': 'test-only-password'})
+        return {'X-Sahara-CSRF': response.json()['csrf_token']}
+
+    def test_configuration_check_is_private_csrf_protected_and_does_not_generate_or_send(self):
+        with patch.object(evolution, 'open_url') as transport:
+            self.assertEqual(self.client.post('/api/admin/whatsapp/ai/check', json={}).status_code, 401)
+            headers = self.login()
+            self.assertEqual(self.client.post('/api/admin/whatsapp/ai/check', json={}).status_code, 403)
+            transport.assert_not_called()
+        metadata = {'name': 'models/' + ai.MODEL, 'supportedGenerationMethods': ['generateContent', 'countTokens']}
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(metadata).encode())) as transport:
+            response = self.client.post('/api/admin/whatsapp/ai/check', json={}, headers=headers)
+        self.assertEqual(response.json()['state'], 'available')
+        request = transport.call_args.args[0]
+        self.assertEqual(request.get_method(), 'GET'); self.assertIsNone(request.data)
+        self.assertNotIn('generateContent', request.full_url)
+        self.assertEqual(transport.call_args.kwargs['timeout'], 12)
+        for table in ['whatsapp_ai_usage', 'whatsapp_outbox', 'whatsapp_ai_jobs']:
+            self.assertEqual(self.rows(table), [])
+        dashboard = self.client.get('/api/admin/whatsapp').json()['ai']
+        self.assertEqual(dashboard['check']['state'], 'available')
+        self.assertIsNone(dashboard['last_result'])
+        self.assertNotIn('gemini-private-test', json.dumps(dashboard))
+
+    def test_check_distinguishes_google_errors_without_returning_upstream_content(self):
+        headers = self.login()
+        cases = [(400, 'API_KEY_INVALID', 'authentication'), (400, 'API_KEY_EXPIRED', 'authentication'),
+                 (403, 'SERVICE_DISABLED', 'service_disabled'), (403, '', 'permissions'),
+                 (404, '', 'model'), (429, '', 'quota'), (500, '', 'provider'), (400, '', 'invalid_request')]
+        for code, detail, reason in cases:
+            body = {'error': {'message': 'gemini-private-test', 'details': [{'reason': detail}]}}
+            error = HTTPError('https://provider.example', code, 'private-upstream-content', {}, io.BytesIO(json.dumps(body).encode()))
+            with patch.object(evolution, 'open_url', side_effect=error):
+                response = self.client.post('/api/admin/whatsapp/ai/check', json={}, headers=headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['state'], reason)
+            for private in ['gemini-private-test', 'private-upstream-content', 'https://provider.example']:
+                self.assertNotIn(private, response.text)
+
+    def test_missing_configuration_check_does_not_call_google(self):
+        headers = self.login()
+        for variable, value, reason in [('SAHARA_AI_ENABLED', '0', 'disabled'), ('SAHARA_AI_API_KEY', '', 'missing_key')]:
+            with patch.dict(os.environ, {variable: value}), patch.object(evolution, 'open_url') as transport:
+                response = self.client.post('/api/admin/whatsapp/ai/check', json={}, headers=headers)
+                self.assertEqual(response.json()['state'], reason); transport.assert_not_called()
+
+    def test_old_verification_does_not_validate_a_new_key_or_disabled_ai(self):
+        metadata = {'name': 'models/' + ai.MODEL, 'supportedGenerationMethods': ['generateContent']}
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(metadata).encode())):
+            ai.check_configuration(self.request)
+        with db(self.request) as conn:
+            self.assertEqual(ai.dashboard(conn)['check']['state'], 'available')
+        for variable, value in [('SAHARA_AI_API_KEY', 'another-private-key'), ('SAHARA_AI_ENABLED', '0')]:
+            with patch.dict(os.environ, {variable: value}), db(self.request) as conn:
+                self.assertIsNone(ai.dashboard(conn)['check'])
+
+    def test_generation_failure_stores_actionable_reason_and_keeps_basic_response(self):
+        self.inbound()
+        error = HTTPError('https://provider.example', 400, 'private', {},
+                          io.BytesIO(json.dumps({'error': {'details': [{'reason': 'API_KEY_INVALID'}]}}).encode()))
+        with patch.object(evolution, 'open_url', side_effect=error):
+            ai.process_one(self.app)
+        self.assertEqual(self.rows('whatsapp_ai_jobs')[0]['reason'], 'authentication')
+        with db(self.request) as conn:
+            self.assertIn('O Google recusou a chave', ai.dashboard(conn)['last_result']['message'])
+        self.assertIn('atendimento automático', self.rows('whatsapp_outbox')[0]['body'])
 
 
 if __name__ == '__main__':
