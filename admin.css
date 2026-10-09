@@ -778,6 +778,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .empty-state { min-height: 300px; padding: 40px 20px; }
 }
 
+.whatsapp-section { min-width: 0; }
 .whatsapp-pairing { display: grid; gap: 12px; margin-block: 16px; }
 .whatsapp-pairing img { width: 280px; max-width: 100%; height: auto; padding: 8px; background: #fff; border: 1px solid var(--border, #d8dce5); border-radius: 8px; }
 .whatsapp-setup { margin-block: 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fafbfc; }

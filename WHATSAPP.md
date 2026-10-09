@@ -212,6 +212,15 @@ base64. Mensagens maiores exigem revisar o limite antes de uso.
 
 ## Verificação de desenvolvimento
 
+O painel carrega a disponibilidade dos serviços antes de consultar a conexão do
+WhatsApp. Uma falha nessa consulta fica restrita à seção do WhatsApp, com a opção
+**Tentar novamente**; os demais módulos continuam acessíveis. As consultas do
+PDV têm limite de 20 segundos, a consulta da Evolution de 35 segundos e o
+pareamento de 100 segundos, pois pode fazer várias chamadas ao provedor.
+O limite inclui a leitura da resposta. Operações não são repetidas automaticamente
+após uma interrupção: confira o resultado antes de tentar novamente, principalmente
+ao registrar pedidos, pagamentos ou mensagens.
+
 ```sh
 python -m unittest discover -s server/tests -v
 node tests/admin.spec.cjs

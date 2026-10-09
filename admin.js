@@ -73,22 +73,39 @@
 
   async function api(path, options = {}) {
     const method = options.method || 'GET';
+    const readOnly = ['GET', 'HEAD'].includes(method);
     const headers = { Accept: 'application/json' };
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-    if (!['GET', 'HEAD'].includes(method) && state.csrf) headers['X-Sahara-CSRF'] = state.csrf;
-    const response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', body: options.body === undefined ? undefined : JSON.stringify(options.body) });
-    let data;
-    try { data = await response.json(); } catch { throw new Error('O servidor não respondeu como esperado. Confira se o backend está ativo.'); }
-    if (!response.ok) {
-      if (response.status === 401 && path !== '/admin/login' && path !== '/admin/session') {
-        state.csrf = null;
-        setAccess('login');
+    if (!readOnly && state.csrf) headers['X-Sahara-CSRF'] = state.csrf;
+    const controller = new AbortController();
+    // Evolution checks may make two provider calls; pairing may make six.
+    const timeout = path === '/admin/whatsapp/connect' ? 100000 : path === '/admin/whatsapp' ? 35000 : 20000;
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', signal: controller.signal, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
+      let data;
+      try { data = await response.json(); }
+      catch (error) {
+        if (controller.signal.aborted) throw error;
+        throw new Error('O servidor não respondeu como esperado. Confira se o backend está ativo.');
       }
-      let detail = typeof data.detail === 'string' ? data.detail : (Array.isArray(data.detail) ? data.detail.map(item => typeof item.msg === 'string' ? item.msg : 'Campo inválido.').join(' ') : (typeof data.error === 'string' ? data.error : `Não foi possível concluir a operação (${response.status}). Confira os campos e tente novamente.`));
-      if (Array.isArray(data.fields)) detail += ` ${data.fields.map(item => `${item.field || 'Campo'}: ${item.message || 'inválido'}`).join(' ')}`;
-      throw new Error(detail);
+      if (!response.ok) {
+        if (response.status === 401 && path !== '/admin/login' && path !== '/admin/session') {
+          state.csrf = null;
+          setAccess('login');
+        }
+        let detail = typeof data.detail === 'string' ? data.detail : (Array.isArray(data.detail) ? data.detail.map(item => typeof item.msg === 'string' ? item.msg : 'Campo inválido.').join(' ') : (typeof data.error === 'string' ? data.error : `Não foi possível concluir a operação (${response.status}). Confira os campos e tente novamente.`));
+        if (Array.isArray(data.fields)) detail += ` ${data.fields.map(item => `${item.field || 'Campo'}: ${item.message || 'inválido'}`).join(' ')}`;
+        throw new Error(detail);
+      }
+      return data;
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(readOnly ? 'O servidor demorou para responder. Confira sua conexão e tente novamente.' : 'Não foi possível confirmar a operação a tempo. Confira o resultado antes de tentar novamente.');
+      if (error instanceof TypeError) throw new Error(readOnly ? 'Não foi possível conectar ao servidor. Confira sua conexão e tente novamente.' : 'A conexão foi interrompida. Confira o resultado da operação antes de tentar novamente.');
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
-    return data;
   }
 
   function setAccess(mode) {
@@ -654,6 +671,7 @@
   }
 
   async function loadIntegrations(screen) {
+    const generation = state.generation;
     const data = await api('/integrations'); const p = panel('Disponibilidade dos serviços', 'O status vem do servidor. Serviços externos exigem contas, credenciais e aprovação dos respectivos fornecedores.');
     const integrations = list(data, 'integrations');
     if (!integrations.length) p.append(el('p', 'Nenhuma integração informada pelo servidor.', 'empty'));
@@ -662,12 +680,34 @@
       heading.append(badge(integration.available ? (integration.id === 'whatsapp' ? 'Configurada' : 'Disponível') : 'Ativação pendente', integration.available ? 'success' : 'warning'));
       item.append(heading, el('p', integration.reason || 'Consulte a configuração do serviço.')); p.append(item);
     }
-    screen.append(p);
-    await loadWhatsApp(screen);
+    const section = el('div', undefined, 'whatsapp-section');
+    screen.append(p, section);
+    void loadWhatsAppSection(section, generation);
   }
 
-  async function loadWhatsApp(screen) {
+  async function loadWhatsAppSection(section, generation) {
+    const current = () => generation === state.generation && Boolean(state.csrf);
+    if (!current()) return;
+    section.setAttribute('aria-busy', 'true');
+    const loading = panel('WhatsApp da Sahara');
+    loading.append(el('p', 'Consultando a conexão do WhatsApp…', 'loading'));
+    section.replaceChildren(loading);
+    const fragment = document.createDocumentFragment();
+    try {
+      await loadWhatsApp(fragment, current);
+      if (current()) section.replaceChildren(fragment);
+    } catch (error) {
+      if (current()) {
+        const failure = panel('Não foi possível carregar o WhatsApp');
+        failure.append(el('p', error.message, 'danger-text'), button('Tentar novamente', () => loadWhatsAppSection(section, generation)));
+        section.replaceChildren(failure);
+      }
+    } finally { section.setAttribute('aria-busy', 'false'); }
+  }
+
+  async function loadWhatsApp(screen, current) {
     const data = await api('/admin/whatsapp');
+    if (!current()) return;
     const byQR = data.provider === 'evolution';
     const setup = panel('WhatsApp da Sahara', 'Atendimento automático, consulta de pedidos e avisos de andamento. Novos pedidos são finalizados no cardápio e registrados no PDV.');
     setup.append(el('p', data.configured ? 'Configuração presente no servidor. A confirmação de envio aparece no histórico abaixo.' : byQR ? 'Ativação pendente: configure o serviço Evolution API no Render para conectar pelo QR Code.' : 'Ativação pendente: conecte o número à API oficial da Meta e configure as credenciais no Render.'));

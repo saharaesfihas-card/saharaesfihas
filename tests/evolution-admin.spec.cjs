@@ -18,17 +18,18 @@ const fixture = {
   last_webhook_at: '', messages: [], conversations: []
 };
 let server, browser, context, page, baseURL, authorized = false;
-let dashboard = structuredClone(fixture), connectResult, connectError, connectWait;
+let dashboard = structuredClone(fixture), dashboardWait, dashboardError, connectResult, connectError, connectWait, ordersWait, partialBody, partialResponse;
 const requests = [], errors = [], external = [];
 let checks = 0;
 
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
-async function render() {
+async function render(waitWhatsApp = true) {
   await page.waitForFunction(() => document.getElementById('sidebar').inert === (window.matchMedia('(max-width: 800px)').matches && !document.body.classList.contains('sidebar-open')));
   if (await page.locator('#sidebar').evaluate(node => node.inert)) await page.locator('#menu-toggle').click();
   await page.locator('#navigation button[data-view="integrations"]').click();
-  await page.locator('#screen[aria-busy="false"]').waitFor();
-  assert.equal(await page.locator('#screen .danger-text').count(), 0, await page.locator('#screen').innerText());
+  await page.locator('#screen[aria-busy="false"]').waitFor({ timeout: 1500 });
+  if (waitWhatsApp) await page.locator('.whatsapp-section[aria-busy="false"]').waitFor();
+  if (waitWhatsApp) assert.equal(await page.locator('#screen .danger-text').count(), 0, await page.locator('#screen').innerText());
 }
 async function capture(name) {
   if (!process.env.SAHARA_EVOLUTION_CAPTURE_DIR) return;
@@ -46,6 +47,12 @@ async function pair() {
 async function start() {
   server = createServer(async (request, response) => {
     try {
+      if (partialBody && request.url === '/api/admin/whatsapp') {
+        partialResponse = response;
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.write('{"configured":');
+        return; // Intentionally incomplete body: the browser must stop waiting.
+      }
       const filename = path.resolve(root, '.' + new URL(request.url, 'http://localhost').pathname);
       if (!filename.startsWith(root + path.sep)) throw new Error('Outside fixture root');
       const content = await readFile(filename);
@@ -69,10 +76,15 @@ async function start() {
     if (endpoint === '/api/admin/login') { authorized = true; return reply({ csrf_token: csrf }); }
     if (endpoint.startsWith('/api/admin/') && !authorized) return reply({ detail: 'Entre no painel.' }, 401);
     if (endpoint === '/api/admin/session') return reply({ csrf_token: csrf });
-    if (endpoint === '/api/admin/orders') return reply({ orders: [] });
+    if (endpoint === '/api/admin/orders') { if (ordersWait) await ordersWait; return reply({ orders: [] }); }
     if (endpoint === '/api/admin/drivers') return reply({ drivers: [] });
     if (endpoint === '/api/integrations') return reply({ integrations: [{ id: 'whatsapp', label: 'WhatsApp · atendimento e avisos de pedidos', available: dashboard.configured, reason: dashboard.configured ? 'Configuração presente. Confira a conexão.' : 'Configure a Evolution API no Render.' }, { id: 'campaigns', label: 'Campanhas', available: false, reason: 'Envio em massa não ativado.' }] });
-    if (endpoint === '/api/admin/whatsapp') return reply(dashboard);
+    if (endpoint === '/api/admin/whatsapp') {
+      if (partialBody) return route.continue();
+      if (dashboardWait) await dashboardWait;
+      if (dashboardError) return reply({ detail: dashboardError }, 503);
+      return reply(dashboard);
+    }
     if (method !== 'GET') assert.equal(request.headers()['x-sahara-csrf'], csrf, `${endpoint} must use the authenticated CSRF token`);
     if (endpoint === '/api/admin/whatsapp/connect') {
       assert.equal(method, 'POST'); assert.deepEqual(data, {});
@@ -203,6 +215,90 @@ async function run() {
       const box = await page.locator('.whatsapp-pairing img').boundingBox(); assert.ok(box.width <= width - 36);
       await capture(`qr-${width}`);
     }
+  });
+  await check('A stalled WhatsApp check leaves other integrations visible and times out with a local retry', async () => {
+    let release; dashboardWait = new Promise(resolve => { release = resolve; });
+    const request = page.waitForRequest(request => request.url().endsWith('/api/admin/whatsapp'));
+    try {
+      await render(false); await request;
+      await page.getByRole('heading', { name: 'Disponibilidade dos serviços', exact: true }).waitFor();
+      await page.getByText('Consultando a conexão do WhatsApp…', { exact: true }).waitFor();
+      await page.clock.fastForward(35001);
+      await page.getByRole('heading', { name: 'Não foi possível carregar o WhatsApp', exact: true }).waitFor();
+      await page.getByText('O servidor demorou para responder. Confira sua conexão e tente novamente.', { exact: true }).waitFor();
+      assert.equal(await page.locator('.whatsapp-section').getAttribute('aria-busy'), 'false');
+      assert.equal(requests.filter(request => request.endpoint === '/api/admin/whatsapp').at(-1).method, 'GET');
+    } finally { dashboardWait = null; release(); }
+    await page.getByRole('button', { name: 'Tentar novamente', exact: true }).click();
+    await page.locator('.whatsapp-section[aria-busy="false"]').waitFor();
+    await page.getByText('WhatsApp: Desconectado', { exact: true }).waitFor();
+  });
+  await check('A failed WhatsApp check preserves the integration list and can recover independently', async () => {
+    dashboardError = 'A Evolution está indisponível neste momento.';
+    await render(false);
+    await page.getByRole('heading', { name: 'Não foi possível carregar o WhatsApp', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Disponibilidade dos serviços', exact: true }).waitFor();
+    await page.getByText(dashboardError, { exact: true }).waitFor();
+    dashboardError = null;
+    await page.getByRole('button', { name: 'Tentar novamente', exact: true }).click();
+    await page.locator('.whatsapp-section[aria-busy="false"]').waitFor();
+    await page.getByText('WhatsApp: Desconectado', { exact: true }).waitFor();
+  });
+  await check('A pairing timeout releases the control and never repeats a mutation automatically', async () => {
+    let release; connectWait = new Promise(resolve => { release = resolve; });
+    const before = requests.filter(request => request.endpoint.endsWith('/whatsapp/connect')).length;
+    const request = page.waitForRequest(request => request.url().endsWith('/api/admin/whatsapp/connect'));
+    try {
+      await page.getByRole('button', { name: 'Gerar QR Code', exact: true }).click(); await request;
+      await page.clock.fastForward(100001);
+      await page.locator('#notice').filter({ hasText: 'Não foi possível confirmar a operação a tempo. Confira o resultado antes de tentar novamente.' }).waitFor();
+      await page.getByText('Conexão não confirmada.', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('button', { name: 'Gerar QR Code', exact: true }).isEnabled(), true);
+      assert.equal(await page.locator('.whatsapp-pairing img').count(), 0);
+      assert.equal(requests.filter(request => request.endpoint.endsWith('/whatsapp/connect')).length, before + 1);
+    } finally { connectWait = null; release(); }
+  });
+  await check('The timeout also covers an incomplete JSON response body', async () => {
+    partialBody = true;
+    const response = page.waitForResponse(response => response.url().endsWith('/api/admin/whatsapp'));
+    try {
+      await render(false); await response;
+      await page.clock.fastForward(35001);
+      await page.getByText('O servidor demorou para responder. Confira sua conexão e tente novamente.', { exact: true }).waitFor();
+      await page.getByRole('heading', { name: 'Disponibilidade dos serviços', exact: true }).waitFor();
+    } finally { partialBody = false; partialResponse?.end('false}'); }
+    await page.getByRole('button', { name: 'Tentar novamente', exact: true }).click();
+    await page.locator('.whatsapp-section[aria-busy="false"]').waitFor();
+  });
+  await check('A late WhatsApp response cannot replace a different screen', async () => {
+    let release; dashboardWait = new Promise(resolve => { release = resolve; });
+    const request = page.waitForRequest(request => request.url().endsWith('/api/admin/whatsapp'));
+    await render(false); await request;
+    await page.locator('#navigation button[data-view="orders"]').click();
+    await page.locator('#screen[aria-busy="false"]').waitFor();
+    const response = page.waitForResponse(response => response.url().endsWith('/api/admin/whatsapp'));
+    dashboardWait = null; release(); await response;
+    // Let the response body and detached loader complete before inspecting the view.
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+    assert.equal(await page.locator('#screen').getAttribute('data-view'), 'orders');
+    assert.equal(await page.locator('#screen-title').innerText(), 'Pedidos e cozinha');
+    assert.equal(await page.locator('.whatsapp-section').count(), 0);
+  });
+  await check('A stalled orders request ends with a usable retry instead of endless loading', async () => {
+    let release; ordersWait = new Promise(resolve => { release = resolve; });
+    const before = requests.filter(request => request.endpoint === '/api/admin/orders').length;
+    const request = page.waitForRequest(request => request.url().endsWith('/api/admin/orders'));
+    try {
+      await page.locator('#navigation button[data-view="orders"]').click(); await request;
+      await page.clock.fastForward(20001);
+      await page.locator('#screen[aria-busy="false"]').waitFor();
+      await page.getByRole('heading', { name: 'Não foi possível carregar os dados', exact: true }).waitFor();
+      await page.getByText('O servidor demorou para responder. Confira sua conexão e tente novamente.', { exact: true }).waitFor();
+      assert.equal(requests.filter(request => request.endpoint === '/api/admin/orders').length, before + 1);
+    } finally { ordersWait = null; release(); }
+    await page.getByRole('button', { name: 'Tentar novamente', exact: true }).click();
+    await page.locator('#screen[aria-busy="false"]').waitFor();
+    assert.equal(await page.locator('#screen .danger-text').count(), 0);
   });
   assert.deepEqual(external, [], 'No external network requests');
   assert.deepEqual(errors, [], 'No browser runtime errors');
