@@ -11,6 +11,14 @@ e consulta do próprio pedido. Não cria pedidos nem confirma pagamentos pelo ch
 As solicitações são finalizadas no cardápio. Estoque, ingredientes, alergias,
 prazos exatos, alterações e reclamações são encaminhados para a equipe.
 
+Com a IA ativada, saudações e agradecimentos recebem respostas naturais locais,
+sem gastar cota do Gemini. Dúvidas livres passam pela IA, e as sugestões chegam
+ao WhatsApp pela fila de envio da Evolution. Assuntos não reconhecidos recebem
+uma pergunta para orientar o cliente, em vez de repetir a lista de números.
+O comando MENU continua disponível para retomar o robô após atendimento humano.
+Uma falha ou limite da IA mantém o atendimento local disponível; isso não prova
+que uma resposta foi gerada pelo Gemini. Consulte o resultado da última consulta.
+
 ## Ativar com a cota gratuita
 
 1. Abra [Google AI Studio](https://aistudio.google.com/api-keys) e crie uma chave

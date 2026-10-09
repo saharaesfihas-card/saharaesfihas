@@ -97,6 +97,49 @@ class DeliveryAITests(unittest.TestCase):
         self.assertEqual(len(self.rows('whatsapp_ai_jobs')), 1)
         self.assertEqual(self.rows('whatsapp_outbox'), [])
 
+    def test_greetings_and_thanks_use_natural_replies_without_spending_ai_quota(self):
+        for text in ['Oi!', 'Olá', 'Boa noite.', 'Muito obrigada!']:
+            self.inbound(text)
+        self.assertEqual(self.rows('whatsapp_ai_jobs'), [])
+        self.assertEqual(self.rows('whatsapp_ai_usage'), [])
+        replies = self.rows('whatsapp_outbox')
+        self.assertEqual(len(replies), 4)
+        self.assertTrue(all('1 —' not in row['body'] for row in replies))
+        self.assertTrue(any('O que você gostaria' in row['body'] for row in replies))
+        self.assertTrue(any('Por nada!' in row['body'] for row in replies))
+        self.inbound('ATENDENTE')
+        self.inbound('Oi!')
+        self.assertEqual(len(self.rows('whatsapp_outbox')), 5)
+        self.inbound('MENU')
+        self.assertEqual(len(self.rows('whatsapp_outbox')), 6)
+
+    def test_ai_reply_reaches_evolution_send_text_once_with_verified_store_connection(self):
+        self.inbound()
+        with patch.object(evolution, 'open_url', return_value=self.response({'intent': 'products', 'product_ids': ['carne', 'queijo']})):
+            self.assertTrue(ai.process_one(self.app))
+        with patch.object(evolution, 'api') as transport:
+            self.assertFalse(whatsapp.process_one(self.app))
+            transport.assert_not_called()
+        with patch.object(evolution, 'connection', return_value='open'), patch.object(evolution, 'api', return_value={'key': {'id': 'fake-ai-outbound'}}) as transport:
+            self.assertTrue(whatsapp.process_one(self.app))
+            self.assertFalse(whatsapp.process_one(self.app))
+            transport.assert_called_once()
+        args = transport.call_args.args
+        self.assertEqual(args[1], '/message/sendText/sahara')
+        self.assertEqual(args[2]['number'], self.phone)
+        self.assertIn('R$ 4,00', args[2]['text'])
+        self.assertIn('Qual delas você prefere?', args[2]['text'])
+        self.assertNotIn('1 —', args[2]['text'])
+        self.assertEqual(self.rows('whatsapp_outbox')[0]['status'], 'accepted')
+
+    def test_unknown_intent_asks_a_delivery_question_instead_of_numbered_menu(self):
+        self.inbound('Pode me ajudar?')
+        with patch.object(ai, 'interpret', return_value={'intent': 'unknown', 'product_ids': []}):
+            self.assertTrue(ai.process_one(self.app))
+        reply = self.rows('whatsapp_outbox')[0]['body']
+        self.assertIn('Me diga o que você precisa', reply)
+        self.assertNotIn('1 —', reply)
+
     def test_transport_is_bounded_structured_redacted_and_has_no_customer_identity(self):
         self.inbound('Sugira sabores. Meu email é pessoa@example.com e telefone 44999999999, rua Particular 123')
         with patch.object(evolution, 'open_url', return_value=self.response({'intent': 'products', 'product_ids': ['carne', 'queijo']})) as transport:

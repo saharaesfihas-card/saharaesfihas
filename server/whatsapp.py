@@ -195,7 +195,13 @@ def normalize(text):
     return ''.join(c for c in unicodedata.normalize('NFKD', text.lower()) if not unicodedata.combining(c)).strip()
 
 
-def answer(conn, recipient, text, allow_ai=False):
+def conversational_welcome():
+    return ('Olá! Sou o atendimento automático da Sahara. Posso te ajudar a escolher esfihas, '
+            'consultar preços, horários e acompanhar seu pedido.\n'
+            'O que você gostaria de pedir hoje? Para falar com a equipe, envie ATENDENTE.')
+
+
+def answer(conn, recipient, text, allow_ai=False, conversational=False):
     normalized = normalize(text)
     now = int(time.time())
     if normalized in ('parar', 'sair', 'stop', 'cancelar avisos'):
@@ -218,6 +224,11 @@ def answer(conn, recipient, text, allow_ai=False):
         update_contact_identity(conn, recipient, 'human_until', 0)
     elif contact and contact['human_until'] > now:
         return None
+    natural = allow_ai or conversational
+    if natural and re.fullmatch(r'(oi|ola|bom dia|boa tarde|boa noite)[\s!.,?]*', normalized):
+        return conversational_welcome()
+    if natural and re.fullmatch(r'(obrigad[oa]|muito obrigad[oa]|valeu)[\s!.,?]*', normalized):
+        return 'Por nada! Se precisar de mais alguma coisa para o seu pedido, é só me dizer. Para falar com a equipe, envie ATENDENTE.'
     if normalized == '3' or re.search(r'\b(horario|abre|fecha|funciona|aberto)\b', normalized):
         return 'Atendemos somente por delivery, de segunda a domingo, das 18h às 23h, no horário de Maringá.'
     if normalized == '4' or re.search(r'\b(pix|pagamento|pagar|cartao|dinheiro)\b', normalized):
@@ -238,6 +249,8 @@ def answer(conn, recipient, text, allow_ai=False):
         return whatsapp_ai.PENDING
     if normalized == '1' or re.search(r'\b(cardapio|comprar|esfiha|shawarma|pedir)\b', normalized):
         return 'Escolha os produtos e finalize seu pedido no cardápio: ' + config()['menu'] + '\nO pedido é registrado no PDV pelo cardápio. Para atendimento pela equipe, envie ATENDENTE.'
+    if natural and normalized != 'menu':
+        return conversational_welcome()
     return ('Olá! Sou o atendimento automático da Sahara.\n1 — Cardápio e novo pedido\n2 — Consultar meu pedido\n'
             '3 — Horários\n4 — Pagamentos\n5 — Falar com a equipe\nResponda com o número da opção. Para desativar avisos, envie PARAR.')
 

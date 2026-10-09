@@ -212,10 +212,13 @@ def render(conn, recipient, result):
                 raise ValueError('Produto removido.')
             price = f"{product['price_cents'] // 100},{product['price_cents'] % 100:02d}"
             items.append(f"• {product['name']} — R$ {price}")
-        return 'Confira estas opções do nosso cardápio:\n' + '\n'.join(items) + '\nEscolha as quantidades e finalize aqui: ' + whatsapp.config()['menu']
+        return 'Posso te sugerir estas opções do nosso cardápio:\n' + '\n'.join(items) + '\nQual delas você prefere? Escolha as quantidades e finalize aqui: ' + whatsapp.config()['menu']
     if intent == 'delivery':
         return ('Atendemos somente por delivery. Para conferir a entrega e a taxa, informe seu endereço no cardápio: '
                 + whatsapp.config()['menu'] + '\nPara combinar detalhes com a loja, envie ATENDENTE.')
+    if intent == 'unknown':
+        return ('Posso te ajudar com os sabores e preços do cardápio, entrega, horários ou seu pedido. '
+                'Me diga o que você precisa. Para falar com a equipe, envie ATENDENTE.')
     command = {'menu': '1', 'hours': '3', 'payment': '4', 'order_status': '2', 'handoff': 'atendente'}.get(intent, 'menu')
     return whatsapp.answer(conn, recipient, command)
 
@@ -263,9 +266,9 @@ def process_one(app):
             status, reason = 'skipped', 'human_or_provider'
         else:
             try:
-                reply = render(conn, job['phone'], result) if result else whatsapp.answer(conn, job['phone'], job['question'])
+                reply = render(conn, job['phone'], result) if result else whatsapp.answer(conn, job['phone'], job['question'], conversational=True)
             except (ValueError, TypeError, KeyError):
-                reply, reason = whatsapp.answer(conn, job['phone'], job['question']), 'provider'
+                reply, reason = whatsapp.answer(conn, job['phone'], job['question'], conversational=True), 'provider'
             if reply:
                 kind = 'reply' if result and result['intent'] == 'handoff' else 'ai_reply'
                 whatsapp.queue(conn, 'reply:' + job['id'], job['phone'], kind, reply)
