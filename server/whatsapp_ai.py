@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from .core import db, utcnow
@@ -15,6 +16,7 @@ from . import evolution
 
 PENDING = object()
 MODEL = 'gemini-2.5-flash-lite'
+MODEL_PATTERN = r'gemini-(?:[0-9]+(?:\.[0-9]+)?-)?flash-lite(?:-(?:latest|preview(?:-[0-9-]+)?|[0-9]{3}))?'
 INTENTS = ('products', 'menu', 'hours', 'payment', 'delivery', 'order_status', 'handoff', 'unknown')
 DIAGNOSTICS = {
     'available': 'Chave e modelo acessíveis. Envie uma pergunta para confirmar uma resposta real da IA.',
@@ -59,11 +61,11 @@ def http_reason(error):
     return {400: 'invalid_request', 403: 'permissions', 404: 'model', 429: 'quota'}.get(error.code, 'provider')
 
 
-def provider_json(request):
+def provider_json(request, *, timeout=12, max_bytes=65536):
     try:
-        with evolution.open_url(request, timeout=12) as response:
-            raw = response.read(65537)
-        if len(raw) > 65536:
+        with evolution.open_url(request, timeout=timeout) as response:
+            raw = response.read(max_bytes + 1)
+        if len(raw) > max_bytes:
             raise ValueError('Resposta muito grande.')
         return json.loads(raw)
     except HTTPError as error:
@@ -73,19 +75,91 @@ def provider_json(request):
 
 
 def fingerprint(cfg):
-    return hashlib.sha256(json.dumps([cfg['key'], cfg['enabled'], MODEL]).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([cfg['key'], cfg['enabled'], cfg.get('model', MODEL)]).encode()).hexdigest()
+
+
+def valid_model(name):
+    return isinstance(name, str) and len(name) <= 80 and re.fullmatch(MODEL_PATTERN, name) is not None
+
+
+def selected_model(conn):
+    from . import whatsapp
+    name = whatsapp.setting(conn, 'ai_model', MODEL)
+    return name if valid_model(name) else MODEL
+
+
+def available_models(request):
+    cfg = config()
+    with db(request) as conn:
+        current = selected_model(conn)
+        last = conn.execute("SELECT result_json FROM whatsapp_ai_probes WHERE result_json<>'' ORDER BY timestamp DESC,rowid DESC LIMIT 1").fetchone()
+    unavailable = []
+    if last:
+        try:
+            probe = json.loads(last['result_json'])
+            if probe.get('state') == 'model' and probe.get('model', MODEL) == current:
+                unavailable = [current]
+        except (ValueError, AttributeError):
+            pass
+    result = {'models': [], 'selected': current, 'unavailable': unavailable}
+    reason = 'disabled' if not cfg['enabled'] else 'missing_key' if not cfg['key'] else ''
+    if reason:
+        return result | {'state': reason, 'message': DIAGNOSTICS[reason]}
+    found, token = set(), ''
+    try:
+        for _ in range(3):
+            query = {'pageSize': 100}
+            if token:
+                query['pageToken'] = token
+            info = provider_json(Request('https://generativelanguage.googleapis.com/v1beta/models?' + urlencode(query),
+                                         headers={'X-Goog-Api-Key': cfg['key'], 'Accept': 'application/json'}), timeout=5, max_bytes=262144)
+            for item in info.get('models', []):
+                if not isinstance(item, dict):
+                    continue
+                name = item.get('name', '')
+                if isinstance(name, str) and name.startswith('models/') and valid_model(name[7:]) and 'generateContent' in item.get('supportedGenerationMethods', []):
+                    found.add(name[7:])
+            token = info.get('nextPageToken', '')
+            if not token:
+                break
+            if not isinstance(token, str) or len(token) > 2048:
+                raise ValueError('Página inválida.')
+        else:
+            raise ValueError('Lista incompleta.')
+    except ProviderError as error:
+        return result | {'state': error.reason, 'message': DIAGNOSTICS[error.reason]}
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        return result | {'state': 'invalid_response', 'message': 'Não foi possível consultar a lista de modelos do Gemini.'}
+    result['models'] = sorted(found, reverse=True)
+    return result | {'state': 'available' if found else 'model', 'message': 'Selecione um modelo Flash-Lite listado pelo Google e use um projeto com plano gratuito.' if found else 'O Google não listou modelos Flash-Lite com geração de texto para esta chave.'}
+
+
+def choose_model(request, name):
+    from . import whatsapp
+    if not valid_model(name):
+        return {'state': 'model', 'message': 'Selecione um modelo Flash-Lite da lista consultada no Google.'}
+    listing = available_models(request)
+    if listing['state'] != 'available':
+        return {'state': listing['state'], 'message': listing['message']}
+    if name not in listing['models']:
+        return {'state': 'model', 'message': 'O Google não listou este modelo para a chave da loja. Atualize a lista de modelos.'}
+    with db(request) as conn:
+        whatsapp.put_setting(conn, 'ai_model', name)
+    return {'state': 'selected', 'model': name, 'message': 'Modelo selecionado: ' + name + '. Use Testar resposta da IA para verificar a geração.'}
 
 
 def check_configuration(request):
     from . import whatsapp
     cfg = config()
+    with db(request) as conn:
+        cfg['model'] = selected_model(conn)
     reason = 'disabled' if not cfg['enabled'] else 'missing_key' if not cfg['key'] else ''
     if not reason:
         try:
             # Model metadata only: no generation, customer data or WhatsApp message.
-            info = provider_json(Request(f'https://generativelanguage.googleapis.com/v1beta/models/{MODEL}',
+            info = provider_json(Request(f'https://generativelanguage.googleapis.com/v1beta/models/{cfg["model"]}',
                                          headers={'X-Goog-Api-Key': cfg['key'], 'Accept': 'application/json'}))
-            reason = 'available' if info.get('name') == 'models/' + MODEL and 'generateContent' in info.get('supportedGenerationMethods', []) else 'model'
+            reason = 'available' if info.get('name') == 'models/' + cfg['model'] and 'generateContent' in info.get('supportedGenerationMethods', []) else 'model'
         except ProviderError as error:
             reason = error.reason
         except (ValueError, TypeError, AttributeError):
@@ -159,6 +233,7 @@ def test_generation(request, identifier):
     cfg = config()
     now = int(time.time())
     with db(request) as conn:
+        cfg['model'] = selected_model(conn)
         saved = conn.execute('SELECT result_json FROM whatsapp_ai_probes WHERE id=?', (identifier,)).fetchone()
         if saved:
             return json.loads(saved['result_json']) if saved['result_json'] else {'state': 'processing', 'message': 'Este teste ainda está em andamento. Aguarde e consulte novamente.', 'checked_at': utcnow()}
@@ -186,12 +261,12 @@ def test_generation(request, identifier):
     with db(request) as conn:
         messages = {'invalid_response': 'O Gemini não retornou uma resposta completa e válida para o teste.',
                     'provider': 'O Gemini está indisponível para gerar a resposta de teste.'}
-        response = {'state': reason or 'generated', 'message': messages.get(reason, DIAGNOSTICS.get(reason)) if reason else 'O Gemini interpretou a pergunta. O PDV montou esta resposta com o cardápio.', 'checked_at': utcnow()}
+        response = {'state': reason or 'generated', 'model': cfg['model'], 'message': messages.get(reason, DIAGNOSTICS.get(reason)) if reason else 'O Gemini interpretou a pergunta. O PDV montou esta resposta com o cardápio.', 'checked_at': utcnow()}
         if not reason:
             try:
                 response['reply'] = render(conn, '', result)
             except (ValueError, TypeError, KeyError):
-                response = {'state': 'invalid_response', 'message': messages['invalid_response'], 'checked_at': utcnow()}
+                response = {'state': 'invalid_response', 'model': cfg['model'], 'message': messages['invalid_response'], 'checked_at': utcnow()}
         conn.execute('UPDATE whatsapp_ai_probes SET result_json=? WHERE id=?', (json.dumps(response), identifier))
     return response
 
@@ -203,6 +278,7 @@ def enqueue(conn, identifier, recipient, provider):
 
 def dashboard(conn):
     cfg = config()
+    cfg['model'] = selected_model(conn)
     used = used_today(conn)
     last = conn.execute('SELECT status,reason,updated_at FROM whatsapp_ai_jobs ORDER BY updated_at DESC,id DESC LIMIT 1').fetchone()
     from . import whatsapp
@@ -214,7 +290,7 @@ def dashboard(conn):
     last_result = dict(last) if last else None
     if last_result and last_result['status'] == 'fallback':
         last_result['message'] = DIAGNOSTICS.get(last_result['reason'], DIAGNOSTICS['provider'])
-    return {'enabled': cfg['enabled'], 'configured': cfg['ready'], 'provider': 'gemini', 'model': MODEL, 'check': check,
+    return {'enabled': cfg['enabled'], 'configured': cfg['ready'], 'provider': 'gemini', 'model': cfg['model'], 'check': check,
             'daily_limit': cfg['limit'], 'used_today': used, 'last_result': last_result,
             'missing': ['SAHARA_AI_API_KEY'] if not cfg['key'] else []}
 
@@ -228,7 +304,10 @@ def scrub(text):
 
 
 def interpret(text, products, cfg):
-    # The host/model are fixed; credentials cannot be redirected by input or configuration.
+    # The host is fixed and model IDs are restricted to text Flash-Lite names.
+    model = cfg.get('model', MODEL)
+    if not valid_model(model):
+        raise ProviderError('model')
     schema = {'type': 'OBJECT', 'properties': {
         'intent': {'type': 'STRING', 'enum': list(INTENTS)},
         'product_ids': {'type': 'ARRAY', 'items': {'type': 'STRING'}, 'maxItems': 3}},
@@ -238,7 +317,7 @@ def interpret(text, products, cfg):
                 {'message': scrub(text), 'catalog': products}, ensure_ascii=False)}]}],
             'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 256,
                                  'responseMimeType': 'application/json', 'responseSchema': schema}}
-    request = Request(f'https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent',
+    request = Request(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
                       data=json.dumps(body).encode(), headers={'Content-Type': 'application/json',
                       'X-Goog-Api-Key': cfg['key']}, method='POST')
     response = provider_json(request)
@@ -287,6 +366,7 @@ def process_one(app):
     if not whatsapp.config()['ready']:
         return False
     with db(request) as conn:
+        cfg['model'] = selected_model(conn)
         job = conn.execute("SELECT j.*,i.body AS question FROM whatsapp_ai_jobs j JOIN whatsapp_inbound i ON i.id=j.id WHERE j.status IN ('pending','recovering') ORDER BY j.created_at,j.id LIMIT 1").fetchone()
         if not job:
             return False

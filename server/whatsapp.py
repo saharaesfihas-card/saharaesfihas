@@ -449,6 +449,21 @@ def test_ai(body: AITest, request: Request):
     return whatsapp_ai.test_generation(request, body.idempotency_key)
 
 
+@router.get('/api/admin/whatsapp/ai/models', dependencies=[Depends(require_admin)])
+def ai_models(request: Request):
+    return whatsapp_ai.available_models(request)
+
+
+class AIModel(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    model: str = Field(min_length=1, max_length=80, pattern='^' + whatsapp_ai.MODEL_PATTERN + '$')
+
+
+@router.post('/api/admin/whatsapp/ai/model', dependencies=[Depends(require_admin)])
+def ai_model(body: AIModel, request: Request):
+    return whatsapp_ai.choose_model(request, body.model)
+
+
 @router.post('/api/admin/whatsapp/connect', dependencies=[Depends(require_admin)])
 def connect_evolution(request: Request):
     cfg = config()

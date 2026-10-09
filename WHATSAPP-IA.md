@@ -1,6 +1,6 @@
 # IA para delivery no WhatsApp da Sahara
 
-O robô conectado por QR Code pode usar o **Gemini 2.5 Flash-Lite** para
+O robô conectado por QR Code pode usar um modelo de texto **Gemini Flash-Lite** para
 interpretar mensagens em linguagem natural e selecionar sugestões do cardápio.
 O modelo retorna somente a intenção e IDs de produtos. O PDV monta o texto com
 nomes e preços cadastrados; não publica texto livre gerado pelo modelo.
@@ -41,7 +41,18 @@ que uma resposta foi gerada pelo Gemini. Consulte o resultado da última consult
 O código não configura cobrança nem faz upgrade de conta. A gratuidade depende
 do projeto e das regras do Google; confira [preços](https://ai.google.dev/gemini-api/docs/pricing)
 e [limites](https://ai.google.dev/gemini-api/docs/rate-limits) antes de ativar.
-O modelo é fixado no servidor, sem troca automática por outro provedor ou modelo.
+O modelo inicial é `gemini-2.5-flash-lite`. Se ele estiver indisponível, abra
+**Integrações → Inteligência artificial no WhatsApp → Atualizar modelos**.
+O PDV consulta a lista do Google com a chave privada e exibe somente modelos de
+texto Flash-Lite que informam suporte a `generateContent`. Selecione outro modelo
+listado e toque em **Usar modelo selecionado**, depois em **Testar resposta da IA**.
+A seleção fica salva na base privada e passa a valer para as perguntas seguintes
+do WhatsApp, os metadados e o teste de geração. Não exige editar chaves no navegador
+nem reiniciar o PDV. Consultar e selecionar modelos não gera conteúdo nem consome
+a cota local de geração. A lista não comprova cota gratuita: mantenha o projeto
+gratuito no AI Studio e confirme a geração. Há no máximo três páginas de listagem,
+com resposta e duração limitadas; uma lista incompleta não altera a seleção.
+Não há troca automática por outro provedor ou modelo após uma falha de geração.
 Se estiver indisponível, o atendimento básico continua e a consulta não é repetida.
 Não é preciso contratar outro servidor para a IA.
 

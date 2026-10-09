@@ -682,24 +682,60 @@
     }
     const section = el('div', undefined, 'whatsapp-section');
     const aiPanel = panel('Inteligência artificial no WhatsApp', 'Verifique a configuração do Gemini para o atendimento da loja.');
+    const modelStatus = el('p', 'Se o modelo estiver indisponível, consulte os modelos de texto Flash-Lite oferecidos pelo Google.', 'help');
+    modelStatus.setAttribute('role', 'status'); modelStatus.setAttribute('aria-live', 'polite');
+    const modelLabel = el('label', 'Modelo da IA'); modelLabel.htmlFor = 'ai-model-selection';
+    const modelSelect = el('select'); modelSelect.id = 'ai-model-selection'; modelSelect.disabled = true; modelSelect.style.maxWidth = '100%'; modelSelect.style.display = 'block';
+    const initialModel = el('option', 'Toque em Atualizar modelos'); initialModel.value = ''; modelSelect.append(initialModel);
+    let modelVersion = 0;
+    const saveModel = button('Usar modelo selecionado', async () => {
+      modelStatus.textContent = 'Verificando o modelo com o Google…';
+      try {
+        const result = await api('/admin/whatsapp/ai/model', { method: 'POST', body: { model: modelSelect.value } });
+        modelStatus.textContent = result.message;
+        if (result.state === 'selected') {
+          modelVersion++; aiCheck.textContent = 'Modelo atualizado. Verifique a geração em Testar resposta da IA.';
+          preview.textContent = 'Teste a pergunta: “Quais esfihas salgadas você sugere e quanto custam?”.';
+          reply.textContent = ''; testKey = crypto.randomUUID();
+        }
+      } catch (error) { modelStatus.textContent = error.message; throw error; }
+    }); saveModel.disabled = true;
+    aiPanel.append(button('Atualizar modelos', async () => {
+      modelSelect.disabled = true; saveModel.disabled = true; modelSelect.replaceChildren();
+      modelStatus.textContent = 'Consultando os modelos disponíveis para a chave da loja…';
+      try {
+        const result = await api('/admin/whatsapp/ai/models'); modelStatus.textContent = result.message;
+        for (const name of list(result, 'models')) {
+          const option = el('option', name); option.value = name; modelSelect.append(option);
+        }
+        if (list(result, 'models').includes(result.selected) && !list(result, 'unavailable').includes(result.selected)) modelSelect.value = result.selected;
+        if (list(result, 'unavailable').includes(result.selected)) modelStatus.textContent += ' O modelo atual falhou no último teste; selecione outro da lista.';
+        modelSelect.disabled = !modelSelect.options.length; saveModel.disabled = modelSelect.disabled;
+      } catch (error) { modelStatus.textContent = error.message; throw error; }
+    }), modelLabel, modelSelect, saveModel, modelStatus,
+    el('p', 'Consultar e selecionar modelos não gera conteúdo. A disponibilidade e a cota gratuita dependem do projeto no Google AI Studio. A troca é aplicada ao atendimento pelo WhatsApp.', 'help'));
     const aiCheck = el('p', 'Toque em Verificar IA para conferir a chave e o modelo.', 'help');
     aiCheck.setAttribute('role', 'status'); aiCheck.setAttribute('aria-live', 'polite');
     aiPanel.append(button('Verificar IA', async () => {
+      const version = modelVersion;
       aiCheck.textContent = 'Verificando a chave e o modelo do Gemini…';
-      try { const result = await api('/admin/whatsapp/ai/check', { method: 'POST', body: {} }); aiCheck.textContent = result.message; }
-      catch (error) { aiCheck.textContent = error.message; throw error; }
+      try { const result = await api('/admin/whatsapp/ai/check', { method: 'POST', body: {} }); if (version === modelVersion) aiCheck.textContent = result.message; }
+      catch (error) { if (version === modelVersion) aiCheck.textContent = error.message; throw error; }
     }), aiCheck, el('p', 'Esta verificação consulta apenas a configuração do modelo. Não gera conteúdo nem envia mensagens no WhatsApp.', 'help'));
     const preview = el('p', 'Teste a pergunta: “Quais esfihas salgadas você sugere e quanto custam?”.', 'help');
     preview.setAttribute('role', 'status'); preview.setAttribute('aria-live', 'polite');
     const reply = el('p', '', 'help'); reply.style.whiteSpace = 'pre-wrap';
     let testKey = crypto.randomUUID();
     aiPanel.append(button('Testar resposta da IA', async () => {
+      const version = modelVersion;
       preview.textContent = 'Consultando o Gemini para gerar a resposta de teste…'; reply.textContent = '';
       try {
         const result = await api('/admin/whatsapp/ai/test', { method: 'POST', body: { idempotency_key: testKey } });
-        preview.textContent = result.message; reply.textContent = result.reply || '';
-        if (result.state !== 'processing') testKey = crypto.randomUUID();
-      } catch (error) { preview.textContent = error.message; throw error; }
+        if (version === modelVersion) {
+          preview.textContent = result.message; reply.textContent = result.reply || '';
+          if (result.state !== 'processing') testKey = crypto.randomUUID();
+        }
+      } catch (error) { if (version === modelVersion) preview.textContent = error.message; throw error; }
     }), preview, reply, el('p', 'Este teste usa uma consulta da cota do Gemini, com até 3 testes por dia. Não envia mensagens no WhatsApp. Se a conexão interromper, tocar novamente consulta o mesmo teste.', 'help'));
     screen.append(aiPanel, p, section);
     void loadWhatsAppSection(section, generation);

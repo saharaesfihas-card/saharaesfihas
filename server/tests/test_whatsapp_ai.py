@@ -333,6 +333,119 @@ class DeliveryAITests(unittest.TestCase):
         response = self.client.post('/api/admin/login', json={'password': 'test-only-password'})
         return {'X-Sahara-CSRF': response.json()['csrf_token']}
 
+    def test_model_routes_require_admin_csrf_and_reject_non_lite_or_unsafe_models(self):
+        endpoint = '/api/admin/whatsapp/ai/model'
+        with patch.object(evolution, 'open_url') as transport:
+            self.assertEqual(self.client.get('/api/admin/whatsapp/ai/models').status_code, 401)
+            self.assertEqual(self.client.post(endpoint, json={'model': ai.MODEL}).status_code, 401)
+            headers = self.login()
+            self.assertEqual(self.client.post(endpoint, json={'model': ai.MODEL}).status_code, 403)
+            for name in ['gemini-9.0-pro', 'gemini-9.0-flash-lite-image', 'https://other.example', '../gemini-9.0-flash-lite', 'gemini-9.0-flash-lite:generateContent']:
+                self.assertEqual(self.client.post(endpoint, json={'model': name}, headers=headers).status_code, 422)
+            transport.assert_not_called()
+
+    def test_model_listing_is_paginated_filtered_and_never_exposes_raw_provider_fields(self):
+        self.login()
+        pages = [{'models': [{'name': 'models/' + ai.MODEL, 'supportedGenerationMethods': ['generateContent']},
+                              {'name': 'models/gemini-9.0-pro', 'supportedGenerationMethods': ['generateContent']},
+                              {'name': 'models/gemini-9.0-flash-lite-image', 'supportedGenerationMethods': ['generateContent']},
+                              {'name': 'models/gemini-9.0-flash-lite', 'supportedGenerationMethods': ['countTokens']}],
+                  'nextPageToken': 'next&apikey=not-a-key'},
+                 {'models': [{'name': 'models/gemini-9.1-flash-lite', 'supportedGenerationMethods': ['generateContent'], 'description': 'gemini-private-test'},
+                              {'name': 'models/gemini-flash-lite-latest', 'supportedGenerationMethods': ['generateContent']}]}]
+        with patch.object(evolution, 'open_url', side_effect=[io.BytesIO(json.dumps(page).encode()) for page in pages]) as transport:
+            response = self.client.get('/api/admin/whatsapp/ai/models')
+        state = response.json()
+        self.assertEqual(state['state'], 'available')
+        self.assertEqual(set(state['models']), {ai.MODEL, 'gemini-9.1-flash-lite', 'gemini-flash-lite-latest'})
+        self.assertEqual(transport.call_count, 2)
+        self.assertIn('pageToken=next%26apikey%3Dnot-a-key', transport.call_args.args[0].full_url)
+        for call in transport.call_args_list:
+            self.assertEqual(call.args[0].get_method(), 'GET')
+            self.assertTrue(call.args[0].full_url.startswith('https://generativelanguage.googleapis.com/v1beta/models?'))
+            self.assertEqual(call.args[0].get_header('X-goog-api-key'), 'gemini-private-test')
+            self.assertEqual(call.kwargs['timeout'], 5)
+        self.assertNotIn('gemini-private-test', response.text)
+        self.assertNotIn('not-a-key', response.text)
+        for table in ['whatsapp_ai_usage', 'whatsapp_ai_probes', 'whatsapp_outbox', 'orders']:
+            self.assertEqual(self.rows(table), [])
+
+    def test_selected_model_is_persisted_and_used_by_metadata_preview_and_whatsapp_worker(self):
+        headers = self.login(); name = 'gemini-9.1-flash-lite'
+        metadata = {'name': 'models/' + ai.MODEL, 'supportedGenerationMethods': ['generateContent']}
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(metadata).encode())):
+            ai.check_configuration(self.request)
+        listing = {'models': [{'name': 'models/' + name, 'supportedGenerationMethods': ['generateContent']}]}
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(listing).encode())):
+            response = self.client.post('/api/admin/whatsapp/ai/model', json={'model': name}, headers=headers)
+        self.assertEqual(response.json()['state'], 'selected')
+        with db(self.request) as conn:
+            self.assertEqual(ai.selected_model(conn), name)
+            self.assertIsNone(ai.dashboard(conn)['check'])
+            self.assertEqual(ai.dashboard(conn)['model'], name)
+        metadata['name'] = 'models/' + name
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(metadata).encode())) as transport:
+            self.assertEqual(ai.check_configuration(self.request)['state'], 'available')
+        self.assertTrue(transport.call_args.args[0].full_url.endswith('/models/' + name))
+        self.inbound()
+        with patch.object(evolution, 'open_url', side_effect=[self.response({'intent': 'products', 'product_ids': ['carne']}), self.response({'intent': 'products', 'product_ids': ['carne']})]) as transport:
+            self.assertTrue(ai.process_one(self.app))
+            self.assertEqual(ai.test_generation(self.request, uuid4().hex)['state'], 'generated')
+        self.assertEqual(transport.call_count, 2)
+        self.assertTrue(all(call.args[0].full_url.endswith('/models/' + name + ':generateContent') for call in transport.call_args_list))
+
+    def test_unlisted_model_is_not_saved_and_selection_never_generates_content(self):
+        listing = {'models': [{'name': 'models/' + ai.MODEL, 'supportedGenerationMethods': ['generateContent']}]}
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(listing).encode())) as transport:
+            self.assertEqual(ai.choose_model(self.request, 'gemini-9.1-flash-lite')['state'], 'model')
+        self.assertEqual(transport.call_count, 1)
+        with db(self.request) as conn:
+            self.assertEqual(ai.selected_model(conn), ai.MODEL)
+        self.assertEqual(self.rows('whatsapp_ai_probes'), [])
+        self.assertEqual(self.rows('whatsapp_ai_usage'), [])
+
+    def test_model_listing_errors_and_incomplete_pagination_preserve_selection_and_hide_secrets(self):
+        error = HTTPError('https://private.example', 403, 'gemini-private-test', {}, io.BytesIO(b'{"error":{"message":"gemini-private-test"}}'))
+        with patch.object(evolution, 'open_url', side_effect=error):
+            result = ai.available_models(self.request)
+        self.assertEqual(result['state'], 'permissions')
+        self.assertNotIn('gemini-private-test', json.dumps(result))
+        pages = [{'models': [{'name': 'models/gemini-9.1-flash-lite', 'supportedGenerationMethods': ['generateContent']}], 'nextPageToken': 'more'}] * 3
+        with patch.object(evolution, 'open_url', side_effect=[io.BytesIO(json.dumps(page).encode()) for page in pages]):
+            result = ai.choose_model(self.request, 'gemini-9.1-flash-lite')
+        self.assertEqual(result['state'], 'invalid_response')
+        with db(self.request) as conn:
+            self.assertEqual(ai.selected_model(conn), ai.MODEL)
+        with patch.dict(os.environ, {'SAHARA_AI_ENABLED': '0'}), patch.object(evolution, 'open_url') as transport:
+            self.assertEqual(ai.available_models(self.request)['state'], 'disabled')
+            transport.assert_not_called()
+
+    def test_legacy_unavailable_probe_marks_failed_current_model_without_changing_it(self):
+        with db(self.request) as conn:
+            conn.execute('INSERT INTO whatsapp_ai_probes VALUES(?,?,?,?)', (uuid4().hex, ai.day(), int(time.time()), json.dumps({'state': 'model'})))
+        listing = {'models': [{'name': 'models/' + ai.MODEL, 'supportedGenerationMethods': ['generateContent']},
+                              {'name': 'models/gemini-9.1-flash-lite', 'supportedGenerationMethods': ['generateContent']}]}
+        with patch.object(evolution, 'open_url', return_value=io.BytesIO(json.dumps(listing).encode())):
+            result = ai.available_models(self.request)
+        self.assertEqual(result['unavailable'], [ai.MODEL])
+        self.assertEqual(result['selected'], ai.MODEL)
+
+    def test_invalid_saved_model_cannot_redirect_key_and_generation_never_changes_models_on_404(self):
+        with db(self.request) as conn:
+            whatsapp.put_setting(conn, 'ai_model', 'https://private.example')
+            self.assertEqual(ai.selected_model(conn), ai.MODEL)
+        with patch.object(evolution, 'open_url') as transport:
+            with self.assertRaises(ai.ProviderError):
+                ai.interpret('test', [], ai.config() | {'model': '../../another-host'})
+            transport.assert_not_called()
+        self.inbound()
+        error = HTTPError('https://provider.example', 404, 'model missing', {}, io.BytesIO(b'{}'))
+        with patch.object(evolution, 'open_url', side_effect=error) as transport:
+            self.assertTrue(ai.process_one(self.app))
+            self.assertFalse(ai.process_one(self.app))
+            transport.assert_called_once()
+        self.assertEqual(self.rows('whatsapp_ai_jobs')[0]['reason'], 'model')
+
     def test_generation_probe_requires_session_csrf_and_bounded_identifier(self):
         endpoint = '/api/admin/whatsapp/ai/test'
         with patch.object(ai, 'interpret') as model:

@@ -24,6 +24,8 @@ const requests = [], errors = [], external = [];
 let checks = 0;
 let aiCheck = { state: 'available', message: 'Chave e modelo acessíveis. Envie uma pergunta para confirmar uma resposta real da IA.' };
 let aiTest = { state: 'generated', message: 'O Gemini interpretou a pergunta. O PDV montou esta resposta com o cardápio.', reply: '• Carne — R$ 4,00' }, aiTestError;
+let selectedModel = 'gemini-2.5-flash-lite', modelListError;
+const modelNames = ['gemini-9.1-flash-lite', 'gemini-2.5-flash-lite'];
 
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
 async function render(waitWhatsApp = true) {
@@ -96,6 +98,15 @@ async function start() {
       assert.equal(method, 'POST'); assert.deepEqual(Object.keys(data), ['idempotency_key']);
       assert.match(data.idempotency_key, /^[0-9a-f-]{36}$/);
       return aiTestError ? reply({ detail: aiTestError }, 503) : reply(aiTest);
+    }
+    if (endpoint === '/api/admin/whatsapp/ai/models') {
+      assert.equal(method, 'GET');
+      return reply(modelListError ? { state: 'model', models: [], selected: selectedModel, message: modelListError } : { state: 'available', models: modelNames, selected: selectedModel, unavailable: selectedModel === 'gemini-2.5-flash-lite' ? [selectedModel] : [], message: 'Selecione um modelo Flash-Lite listado pelo Google e use um projeto com plano gratuito.' });
+    }
+    if (endpoint === '/api/admin/whatsapp/ai/model') {
+      assert.equal(method, 'POST'); assert.equal(Object.keys(data).length, 1); assert.ok(modelNames.includes(data.model));
+      selectedModel = data.model;
+      return reply({ state: 'selected', model: selectedModel, message: 'Modelo selecionado: ' + selectedModel + '. Use Testar resposta da IA para verificar a geração.' });
     }
     if (endpoint === '/api/admin/whatsapp/connect') {
       assert.equal(method, 'POST'); assert.deepEqual(data, {});
@@ -277,6 +288,28 @@ async function run() {
     assert.equal(requests.filter(request => request.endpoint === '/api/admin/whatsapp/ai/test').at(-1).data.idempotency_key, interruptedKey);
     assert.equal(await page.getByText('• Carne — R$ 4,00', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: 'Testar resposta da IA', exact: true }).isEnabled(), true);
+  });
+  await check('A failed fixed model can be replaced with a Google-listed text Lite model without generating content', async () => {
+    await render();
+    const probeCount = requests.filter(request => request.endpoint === '/api/admin/whatsapp/ai/test').length;
+    assert.equal(await page.getByRole('button', { name: 'Usar modelo selecionado', exact: true }).isEnabled(), false);
+    await page.getByRole('button', { name: 'Atualizar modelos', exact: true }).click();
+    await page.getByText(/O modelo atual falhou no último teste/).waitFor();
+    assert.equal(await page.getByLabel('Modelo da IA', { exact: true }).inputValue(), 'gemini-9.1-flash-lite');
+    assert.equal(requests.some(request => request.endpoint === '/api/admin/whatsapp/ai/model'), false);
+    await page.getByRole('button', { name: 'Usar modelo selecionado', exact: true }).click();
+    await page.getByText('Modelo selecionado: gemini-9.1-flash-lite. Use Testar resposta da IA para verificar a geração.', { exact: true }).waitFor();
+    assert.equal(requests.filter(request => request.endpoint === '/api/admin/whatsapp/ai/test').length, probeCount);
+    for (const width of [350, 390, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `Model selector overflows at ${width}`);
+    }
+    modelListError = 'O Google não listou modelos Flash-Lite com geração de texto para esta chave.';
+    await page.getByRole('button', { name: 'Atualizar modelos', exact: true }).click();
+    await page.getByText(modelListError, { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Usar modelo selecionado', exact: true }).isEnabled(), false);
+    assert.equal(await page.getByLabel('Modelo da IA', { exact: true }).isEnabled(), false);
+    modelListError = null;
   });
   await check('AI verification remains visible when the WhatsApp dashboard has no AI status', async () => {
     const savedAI = dashboard.ai;
