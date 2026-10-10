@@ -29,6 +29,7 @@ LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo
 REQUIRED = ('SAHARA_WHATSAPP_ACCESS_TOKEN', 'SAHARA_WHATSAPP_PHONE_NUMBER_ID',
             'SAHARA_WHATSAPP_APP_SECRET', 'SAHARA_WHATSAPP_VERIFY_TOKEN')
 DELIVERY_RANK = {'accepted': 0, 'sent': 1, 'delivered': 2, 'read': 3, 'failed': 4}
+MENU_IMAGE = '/images/cardapio-panfleto-20261010.png'
 
 
 def config():
@@ -40,6 +41,7 @@ def config():
                   language=os.environ.get('SAHARA_WHATSAPP_TEMPLATE_LANGUAGE', 'pt_BR').strip(),
                   SAHARA_EVOLUTION_EXPECTED_NUMBER=os.environ.get('SAHARA_EVOLUTION_EXPECTED_NUMBER', evolution.DEFAULT_NUMBER).strip(),
                   menu=os.environ.get('SAHARA_PUBLIC_URL', 'https://sahara-esfihas-pdv.onrender.com').rstrip('/') + '/index.html')
+    values['welcome_menu'] = os.environ.get('SAHARA_WHATSAPP_WELCOME_MENU', '1') != '0'
     required = evolution.REQUIRED if values['provider'] == 'evolution' else REQUIRED
     valid = evolution.valid_config(values) if values['provider'] == 'evolution' else bool(
         values['provider'] == 'meta' and re.fullmatch(r'v\d+\.\d+', version)
@@ -160,6 +162,8 @@ def initialize(conn):
     columns = {row[1] for row in conn.execute('PRAGMA table_info(whatsapp_outbox)')}
     if 'provider' not in columns:
         conn.execute("ALTER TABLE whatsapp_outbox ADD COLUMN provider TEXT NOT NULL DEFAULT 'meta'")
+    if 'after_event' not in columns:
+        conn.execute("ALTER TABLE whatsapp_outbox ADD COLUMN after_event TEXT NOT NULL DEFAULT ''")
     whatsapp_ai.initialize(conn)
     whatsapp_checkout.initialize(conn)
 
@@ -173,13 +177,13 @@ def put_setting(conn, key, value):
     conn.execute('INSERT INTO whatsapp_settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
 
 
-def queue(conn, event, recipient, kind, body, order_id=None, status=None):
+def queue(conn, event, recipient, kind, body, order_id=None, status=None, *, after_event=''):
     recipient = evolution.canonical_phone(recipient)
     if not recipient:
         return
     conn.execute('''INSERT OR IGNORE INTO whatsapp_outbox
-        (id,event_key,phone,kind,body,order_id,order_status,created_at,updated_at,provider) VALUES(?,?,?,?,?,?,?,?,?,?)''',
-        (uuid4().hex, event, recipient, kind, body[:4096], order_id, status, utcnow(), utcnow(), config()['provider']))
+        (id,event_key,phone,kind,body,order_id,order_status,created_at,updated_at,provider,after_event) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+        (uuid4().hex, event, recipient, kind, body[:4096], order_id, status, utcnow(), utcnow(), config()['provider'], after_event))
 
 
 def order_notice(conn, order):
@@ -270,9 +274,25 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False):
             '3 — Horários\n4 — Pagamentos\n5 — Falar com a equipe\nResponda com o número da opção. Para desativar avisos, envie PARAR.')
 
 
-def respond_to_inbound(conn, identifier, recipient, text):
+def respond_to_inbound(conn, identifier, recipient, text, *, new_conversation=False):
     before = whatsapp_checkout.load(conn, recipient)
     reply = answer(conn, recipient, text, allow_ai=whatsapp_ai.config()['ready']) if text else answer(conn, recipient, 'atendente')
+    contact = contact_identity(conn, recipient)
+    normalized = normalize(text)
+    automatic = (bool(text) and (reply is whatsapp_ai.PENDING or bool(reply))
+                 and not (contact and contact['human_until'] > int(time.time()))
+                 and normalized not in ('parar', 'sair', 'stop', 'cancelar avisos', 'ativar avisos'))
+    opening = config()['welcome_menu'] and automatic and new_conversation
+    requested_menu = normalized in ('1', 'menu', 'cardapio', 'ver cardapio', 'quero o cardapio')
+    if config()['welcome_menu'] and automatic and (opening or requested_menu):
+        welcome_event = 'welcome:' + identifier
+        if opening:
+            queue(conn, welcome_event, recipient, 'welcome', conversational_welcome())
+        queue(conn, 'menu-image:' + identifier, recipient, 'menu_image',
+              'Confira nosso cardápio! Para montar seu pedido aqui, envie PEDIR. '
+              'Cardápio online: ' + config()['menu'], after_event=welcome_event if opening else '')
+        if requested_menu or re.fullmatch(r'(oi|ola|bom dia|boa tarde|boa noite)[\s!.,?]*', normalized):
+            return
     if reply is whatsapp_ai.PENDING:
         whatsapp_ai.enqueue(conn, identifier, recipient, config()['provider'])
     elif reply:
@@ -347,11 +367,12 @@ async def receive(request: Request):
                         inserted = conn.execute('INSERT OR IGNORE INTO whatsapp_inbound VALUES(?,?,?,?)', (key, recipient, text[:4096] or '[Mensagem não textual]', utcnow())).rowcount
                         if not inserted:
                             continue
+                        previous = contact_identity(conn, recipient)
                         conn.execute('INSERT INTO whatsapp_contacts(phone,last_inbound) VALUES(?,?) ON CONFLICT(phone) DO UPDATE SET last_inbound=MAX(last_inbound,excluded.last_inbound)', (recipient, timestamp))
                         # Eventos antigos são arquivados, sem reabrir a janela de atendimento.
                         if timestamp < int(time.time()) - 86400:
                             continue
-                        respond_to_inbound(conn, key, recipient, text)
+                        respond_to_inbound(conn, key, recipient, text, new_conversation=not previous or timestamp - previous['last_inbound'] >= 86400)
             put_setting(conn, 'last_webhook_at', utcnow())
     except (ValueError, TypeError, AttributeError, KeyError):
         raise HTTPException(400, 'Evento inválido.') from None
@@ -429,10 +450,11 @@ async def evolution_webhook(request: Request):
                     identifier = 'evolution:' + cfg['SAHARA_EVOLUTION_INSTANCE'] + ':' + identifier
                     if not conn.execute('INSERT OR IGNORE INTO whatsapp_inbound VALUES(?,?,?,?)', (identifier, recipient, text[:4096] or '[Mensagem não textual]', utcnow())).rowcount:
                         continue
+                    previous = contact_identity(conn, recipient)
                     conn.execute('INSERT INTO whatsapp_contacts(phone,last_inbound) VALUES(?,?) ON CONFLICT(phone) DO UPDATE SET last_inbound=MAX(last_inbound,excluded.last_inbound)', (recipient, timestamp))
                     if timestamp < int(time.time()) - 86400:
                         continue  # Não responde ao histórico antigo sincronizado ao parear.
-                    respond_to_inbound(conn, identifier, recipient, text)
+                    respond_to_inbound(conn, identifier, recipient, text, new_conversation=not previous or timestamp - previous['last_inbound'] >= 86400)
             put_setting(conn, 'evolution_last_webhook_at', utcnow())
     except (ValueError, TypeError, AttributeError, KeyError, RecursionError):
         raise HTTPException(400, 'Evento inválido.') from None
@@ -504,10 +526,14 @@ def connect_evolution(request: Request):
 
 def payload(conn, row, cfg):
     contact = contact_identity(conn, row['phone'])
-    if row['kind'] in ('ai_reply', 'checkout_reply') and contact and contact['human_until'] > int(time.time()):
+    if row['kind'] in ('ai_reply', 'checkout_reply', 'welcome', 'menu_image') and contact and contact['human_until'] > int(time.time()):
         return None, 'skipped', 'Atendimento automático pausado para a equipe.'
-    if row['kind'] in ('ai_reply', 'checkout_reply') and int(time.time()) - datetime.fromisoformat(row['created_at']).timestamp() > 86400:
+    if row['kind'] in ('ai_reply', 'checkout_reply', 'welcome', 'menu_image') and int(time.time()) - datetime.fromisoformat(row['created_at']).timestamp() > 86400:
         return None, 'skipped', 'Resposta de IA expirada.'
+    if row['after_event']:
+        preceding = conn.execute('SELECT status FROM whatsapp_outbox WHERE event_key=?', (row['after_event'],)).fetchone()
+        if not preceding or preceding['status'] not in ('accepted', 'sent', 'delivered', 'read'):
+            return None, 'skipped', 'A mensagem anterior não teve envio confirmado.'
     if row['kind'] == 'order':
         order = conn.execute('SELECT whatsapp_opt_in,status FROM orders WHERE id=?', (row['order_id'],)).fetchone()
         if not order or not order['whatsapp_opt_in'] or (contact and contact['opted_out']):
@@ -515,9 +541,16 @@ def payload(conn, row, cfg):
         if order['status'] != row['order_status']:
             return None, 'skipped', 'Etapa superada. O pedido já avançou para outro estado.'
     if cfg['provider'] == 'evolution':
+        if row['kind'] == 'menu_image':
+            return {'number': evolution.canonical_phone(row['phone']), 'mediatype': 'image',
+                    'mimetype': 'image/png', 'caption': row['body'], 'fileName': 'cardapio-sahara.png',
+                    'media': cfg['menu'].removesuffix('/index.html') + MENU_IMAGE}, None, None
         return {'number': evolution.canonical_phone(row['phone']), 'text': row['body'], 'linkPreview': False}, None, None
     base = {'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': evolution.canonical_phone(row['phone'])}
     if contact and contact['last_inbound'] > int(time.time()) - 86400:
+        if row['kind'] == 'menu_image':
+            return base | {'type': 'image', 'image': {'link': cfg['menu'].removesuffix('/index.html') + MENU_IMAGE,
+                                                  'caption': row['body']}}, None, None
         return base | {'type': 'text', 'text': {'preview_url': False, 'body': row['body']}}, None, None
     if row['kind'] == 'order' and cfg['template']:
         return base | {'type': 'template', 'template': {'name': cfg['template'], 'language': {'code': cfg['language']},
@@ -542,13 +575,22 @@ def send(cfg, data):
     return identifier
 
 
+def next_outbox(conn, cfg):
+    return conn.execute('''SELECT o.* FROM whatsapp_outbox o
+        LEFT JOIN whatsapp_outbox previous ON previous.event_key=o.after_event
+        WHERE o.status='pending' AND o.provider=? AND o.next_attempt<=?
+        AND (o.after_event='' OR previous.id IS NULL
+             OR previous.status NOT IN ('pending','sending','blocked'))
+        ORDER BY o.created_at,o.rowid LIMIT 1''', (cfg['provider'], int(time.time()))).fetchone()
+
+
 def process_one(app):
     cfg = config()
     if not cfg['ready']:
         return False
     request = SimpleNamespace(app=app)
     with db(request) as conn:
-        pending = conn.execute("SELECT 1 FROM whatsapp_outbox WHERE status='pending' AND provider=? AND next_attempt<=? LIMIT 1", (cfg['provider'], int(time.time()))).fetchone()
+        pending = next_outbox(conn, cfg)
         if not pending:
             return False
         needs_check = cfg['provider'] == 'evolution' and not verified_evolution_connection(conn, cfg)
@@ -559,7 +601,7 @@ def process_one(app):
     with db(request) as conn:
         if cfg['provider'] == 'evolution' and not verified_evolution_connection(conn, cfg):
             return False  # No envio, exige identidade recente da configuração atual.
-        row = conn.execute("SELECT * FROM whatsapp_outbox WHERE status='pending' AND provider=? AND next_attempt<=? ORDER BY created_at,id LIMIT 1", (cfg['provider'], int(time.time()))).fetchone()
+        row = next_outbox(conn, cfg)
         if not row:
             return False
         data, status, error = payload(conn, row, cfg)

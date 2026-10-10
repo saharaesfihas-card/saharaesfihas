@@ -29,6 +29,8 @@ class WhatsAppTests(unittest.TestCase):
 
     def setUp(self):
         self.env = patch.dict(os.environ, {
+            # Existing commands are isolated; welcome media has its own suite.
+            'SAHARA_WHATSAPP_WELCOME_MENU': '0',
             'SAHARA_WHATSAPP_PROVIDER': 'meta',
             'SAHARA_WHATSAPP_ENABLED': '1', 'SAHARA_WHATSAPP_ACCESS_TOKEN': 'test-token-not-real',
             'SAHARA_WHATSAPP_PHONE_NUMBER_ID': '12345', 'SAHARA_WHATSAPP_APP_SECRET': 'test-secret',

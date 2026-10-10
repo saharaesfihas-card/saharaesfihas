@@ -179,7 +179,8 @@ def connect(cfg):
 
 
 def send(cfg, data):
-    result = api(cfg, '/message/sendText/' + instance_path(cfg), data)
+    operation = 'sendMedia' if data.get('mediatype') == 'image' else 'sendText'
+    result = api(cfg, '/message/' + operation + '/' + instance_path(cfg), data)
     key = result.get('key') if isinstance(result, dict) else None
     identifier = key.get('id') if isinstance(key, dict) else None
     if not isinstance(identifier, str) or not identifier or len(identifier) > 512:

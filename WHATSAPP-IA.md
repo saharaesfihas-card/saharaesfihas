@@ -1,5 +1,23 @@
 # IA para delivery no WhatsApp da Sahara
 
+## Cardápio ao iniciar a conversa
+
+Por padrão, o primeiro contato recebe a saudação e, em seguida, o panfleto do
+cardápio como imagem. Uma conversa é considerada nova no primeiro contato ou
+depois de 24 horas sem mensagens do cliente. A imagem não é repetida a cada
+mensagem; **CARDÁPIO**, **MENU** ou **1** permitem solicitá-la novamente.
+
+A saudação precisa ter envio confirmado pelo provedor antes de liberar a imagem.
+Webhooks repetidos não criam novos envios. A pausa para a equipe e mensagens
+antigas de sincronização não disparam o panfleto. Perguntas e pedidos recebidos
+na primeira mensagem continuam sendo tratados normalmente.
+
+O arquivo público é `images/cardapio-panfleto-20261010.png`, com os preços
+conferidos em 10/10/2026. Ao mudar o cardápio, atualizar também a imagem e o caminho
+`MENU_IMAGE` em `server/whatsapp.py`. Para desativar apenas esse envio automático,
+configurar `SAHARA_WHATSAPP_WELCOME_MENU=0` no servidor.
+
+
 O robô conectado por QR Code pode usar um modelo de texto **Gemini Flash-Lite** para
 interpretar mensagens em linguagem natural e selecionar sugestões do cardápio.
 O modelo retorna a intenção, IDs de produtos e uma resposta natural. Perguntas

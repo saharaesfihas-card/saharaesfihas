@@ -27,6 +27,7 @@ class DeliveryAITests(unittest.TestCase):
 
     def setUp(self):
         self.environment = patch.dict(os.environ, {
+            'SAHARA_WHATSAPP_WELCOME_MENU': '0',
             'SAHARA_WHATSAPP_PROVIDER': 'evolution', 'SAHARA_WHATSAPP_ENABLED': '1',
             'SAHARA_EVOLUTION_URL': 'https://evolution.example', 'SAHARA_EVOLUTION_API_KEY': 'evolution-private-test',
             'SAHARA_EVOLUTION_INSTANCE': 'sahara', 'SAHARA_EVOLUTION_WEBHOOK_SECRET': 'webhook-private-test',
