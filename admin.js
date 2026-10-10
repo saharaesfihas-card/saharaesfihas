@@ -342,6 +342,7 @@
       top.append(heading, badge(statuses[order.status] || order.status, `status-${stageKey(order.status)}`)); card.append(top);
       if (fromIFood) card.append(el('p', 'iFood · loja de teste. Confira e gerencie as etapas no Gestor do iFood.', 'badge warning'));
       else if (order.status !== 'cancelled') card.append(orderProgress(order.status));
+      if (order.source === 'whatsapp') card.append(el('p', 'Recebido pelo WhatsApp', 'badge'));
       const customer = el('div', undefined, 'order-customer');
       const customerText = el('div'); customerText.append(el('p', order.customer_name || 'Cliente', 'customer-name'));
       if (order.customer_phone) customerText.append(el('p', order.customer_phone, 'order-meta'));
@@ -842,7 +843,8 @@
     const data = await api('/admin/whatsapp');
     if (!current()) return;
     const byQR = data.provider === 'evolution';
-    const setup = panel('WhatsApp da Sahara', 'Atendimento automático, consulta de pedidos e avisos de andamento. Novos pedidos são finalizados no cardápio e registrados no PDV.');
+    const setup = panel('WhatsApp da Sahara', 'Atendimento automático, carrinho na conversa, registro de pedidos no PDV e avisos de andamento. O cardápio também continua disponível.');
+    if (data.configured) setup.append(el('p', 'Para comprar pelo WhatsApp, o cliente envia PEDIR, escolhe os itens e envia FINALIZAR. O robô coleta nome, entrega e pagamento, mostra o resumo e registra somente após CONFIRMAR PEDIDO. O pagamento permanece a conferir pela loja.', 'hint'));
     setup.append(el('p', data.configured ? 'Configuração presente no servidor. A confirmação de envio aparece no histórico abaixo.' : byQR ? 'Ativação pendente: configure o serviço Evolution API no Render para conectar pelo QR Code.' : 'Ativação pendente: conecte o número à API oficial da Meta e configure as credenciais no Render.'));
     if (!data.configured && byQR) {
       const guide = el('details', undefined, 'whatsapp-setup');

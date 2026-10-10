@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+from typing import Literal
 from types import SimpleNamespace
 import unicodedata
 from urllib.error import HTTPError, URLError
@@ -20,7 +21,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .core import db, require_admin, utcnow
-from . import evolution, whatsapp_ai
+from . import evolution, whatsapp_ai, whatsapp_checkout
 
 router = APIRouter()
 LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo',
@@ -160,6 +161,7 @@ def initialize(conn):
     if 'provider' not in columns:
         conn.execute("ALTER TABLE whatsapp_outbox ADD COLUMN provider TEXT NOT NULL DEFAULT 'meta'")
     whatsapp_ai.initialize(conn)
+    whatsapp_checkout.initialize(conn)
 
 
 def setting(conn, key, default=''):
@@ -198,7 +200,7 @@ def normalize(text):
 def conversational_welcome():
     return ('Olá! Sou o atendimento automático da Sahara. Posso te ajudar a escolher esfihas, '
             'consultar preços, horários e acompanhar seu pedido.\n'
-            'O que você gostaria de pedir hoje? Para falar com a equipe, envie ATENDENTE.')
+            'O que você gostaria de pedir hoje? Para montar o carrinho aqui, envie PEDIR. Para falar com a equipe, envie ATENDENTE.')
 
 
 def answer(conn, recipient, text, allow_ai=False, conversational=False):
@@ -216,7 +218,9 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False):
         placeholders = ','.join('?' for _ in aliases)
         conn.execute(f"UPDATE orders SET whatsapp_opt_in=1 WHERE customer_phone IN ({placeholders}) AND status NOT IN ('delivered','cancelled')", aliases)
         return 'Avisos dos seus pedidos ativos autorizados. Para desativar, envie PARAR.'
-    if normalized in ('5', 'atendente', 'humano') or re.search(r'\b(atendente|humano|reclamacao)\b', normalized) or (allow_ai and re.search(r'\b(alergia|alergico|alergica|gluten|lactose|ingredientes|intolerancia|restricao alimentar)\b', normalized)):
+    cart = whatsapp_checkout.load(conn, recipient)
+    collecting = cart and not cart['expired'] and cart['stage'] not in ('completed', 'cancelled', 'items', 'review')
+    if (normalized == '5' and not collecting) or normalized in ('atendente', 'humano') or re.search(r'\b(atendente|humano|reclamacao)\b', normalized) or ((allow_ai or cart) and re.search(r'\b(alergia|alergico|alergica|gluten|lactose|ingredientes|intolerancia|restricao alimentar)\b', normalized)):
         update_contact_identity(conn, recipient, 'human_until', now + 86400)
         return 'Sua conversa ficou disponível para a equipe no PDV. O atendimento automático está pausado. Atendemos de segunda a domingo, das 18h às 23h. Para voltar ao menu automático, envie MENU.'
     contact = contact_identity(conn, recipient)
@@ -229,6 +233,17 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False):
         return conversational_welcome()
     if natural and re.fullmatch(r'(obrigad[oa]|muito obrigad[oa]|valeu)[\s!.,?]*', normalized):
         return 'Por nada! Se precisar de mais alguma coisa para o seu pedido, é só me dizer. Para falar com a equipe, envie ATENDENTE.'
+    if normalized not in ('menu', 'status', 'status do pedido', 'consultar pedido'):
+        try:
+            checkout_reply = whatsapp_checkout.handle(conn, recipient, text)
+        except ValueError as error:
+            checkout_reply = str(error) + ' Para recomeçar os itens, envie LIMPAR CARRINHO.'
+        if checkout_reply is not None:
+            return checkout_reply
+        if cart and not cart['expired'] and cart['stage'] == 'items':
+            if allow_ai:
+                return whatsapp_ai.PENDING
+            return 'Não identifiquei os itens com segurança. Use o nome do cardápio, por exemplo: 2 carne e 1 queijo. Para ajuda, envie ATENDENTE.'
     if normalized == '3' or re.search(r'\b(horario|abre|fecha|funciona|aberto)\b', normalized):
         return 'Atendemos somente por delivery, de segunda a domingo, das 18h às 23h, no horário de Maringá.'
     if normalized == '4' or re.search(r'\b(pix|pagamento|pagar|cartao|dinheiro)\b', normalized):
@@ -256,11 +271,19 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False):
 
 
 def respond_to_inbound(conn, identifier, recipient, text):
+    before = whatsapp_checkout.load(conn, recipient)
     reply = answer(conn, recipient, text, allow_ai=whatsapp_ai.config()['ready']) if text else answer(conn, recipient, 'atendente')
     if reply is whatsapp_ai.PENDING:
         whatsapp_ai.enqueue(conn, identifier, recipient, config()['provider'])
     elif reply:
-        queue(conn, 'reply:' + identifier, recipient, 'reply', reply)
+        cart = whatsapp_checkout.load(conn, recipient)
+        contact = contact_identity(conn, recipient)
+        checkout = cart and ((before and before['stage'] not in ('completed', 'cancelled'))
+                            or not before or before['id'] != cart['id']
+                            or normalize(text) in ('carrinho', 'confirmar pedido')) and not (contact and contact['human_until'] > int(time.time()))
+        if checkout:
+            conn.execute('INSERT OR IGNORE INTO whatsapp_checkout_events VALUES(?)', (identifier,))
+        queue(conn, 'reply:' + identifier, recipient, 'checkout_reply' if checkout else 'reply', reply)
 
 
 @router.get('/api/whatsapp/webhook')
@@ -442,11 +465,12 @@ def check_ai(request: Request):
 class AITest(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     idempotency_key: str = Field(min_length=16, max_length=128, pattern=r'^[a-zA-Z0-9_-]+$')
+    scenario: Literal['products', 'cart'] = 'products'
 
 
 @router.post('/api/admin/whatsapp/ai/test', dependencies=[Depends(require_admin)])
 def test_ai(body: AITest, request: Request):
-    return whatsapp_ai.test_generation(request, body.idempotency_key)
+    return whatsapp_ai.test_generation(request, body.idempotency_key, body.scenario)
 
 
 @router.get('/api/admin/whatsapp/ai/models', dependencies=[Depends(require_admin)])
@@ -480,9 +504,9 @@ def connect_evolution(request: Request):
 
 def payload(conn, row, cfg):
     contact = contact_identity(conn, row['phone'])
-    if row['kind'] == 'ai_reply' and contact and contact['human_until'] > int(time.time()):
+    if row['kind'] in ('ai_reply', 'checkout_reply') and contact and contact['human_until'] > int(time.time()):
         return None, 'skipped', 'Atendimento automático pausado para a equipe.'
-    if row['kind'] == 'ai_reply' and int(time.time()) - datetime.fromisoformat(row['created_at']).timestamp() > 86400:
+    if row['kind'] in ('ai_reply', 'checkout_reply') and int(time.time()) - datetime.fromisoformat(row['created_at']).timestamp() > 86400:
         return None, 'skipped', 'Resposta de IA expirada.'
     if row['kind'] == 'order':
         order = conn.execute('SELECT whatsapp_opt_in,status FROM orders WHERE id=?', (row['order_id'],)).fetchone()

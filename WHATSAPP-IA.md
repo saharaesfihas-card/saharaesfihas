@@ -10,8 +10,10 @@ continuam vindo das regras da loja.
 
 O atendimento é especializado em delivery: sugestões de sabores e bebidas,
 cardápio, funcionamento, formas de pagamento, orientações para informar o endereço
-e consulta do próprio pedido. Não cria pedidos nem confirma pagamentos pelo chat.
-As solicitações são finalizadas no cardápio. Estoque, ingredientes, alergias,
+e consulta do próprio pedido. Agora o carrinho também pode ser montado na conversa
+e registrado no PDV após revisão e confirmação explícita do cliente. A IA interpreta
+itens e quantidades, mas a confirmação é processada pelas regras locais. Pagamentos
+nunca são confirmados pela IA. O cardápio continua disponível. Estoque, ingredientes, alergias,
 prazos exatos, alterações e reclamações são encaminhados para a equipe.
 
 Com a IA ativada, saudações e agradecimentos recebem respostas naturais locais,
@@ -73,7 +75,8 @@ contam. As cotas gratuitas do Google podem ser inferiores ou mudar.
 `MENU`, `PARAR`, `ATIVAR AVISOS`, `ATENDENTE`, horários, formas de pagamento e
 consultas explícitas de status continuam usando regras locais, sem consulta à IA.
 O pedido pertence sempre ao número verificado no webhook. A IA não pode escolher
-outro cliente, executar ferramentas, criar pedidos ou modificar preços.
+outro cliente, executar ferramentas, confirmar pedidos ou modificar preços. Somente
+o fluxo local de confirmação pode registrar o pedido revisado no PDV.
 
 Pedidos de ajuda humana pausam o robô por 24 horas. Consultas de IA pendentes
 ou respostas geradas que ainda não foram enviadas são descartadas durante essa
@@ -154,3 +157,48 @@ O modelo recebe até seis mensagens recentes da mesma conversa, dentro das últi
 e endereços são removidos desse contexto. Não recebe conversas de outros clientes.
 Respostas gerais podem conter imprecisões; informações atuais sem fonte devem ser
 tratadas como incertas. Não há navegação na internet nem execução de ações pela IA.
+
+## Pedidos completos pelo WhatsApp
+
+1. O cliente envia **PEDIR** ou **NOVO PEDIDO**. Um carrinho privado é aberto.
+2. Envia, por exemplo, **2 carne e 1 queijo**. Nomes exatos e quantidades numéricas
+   são processados localmente, mesmo sem cota de IA. Solicitações em linguagem livre,
+   como "quero duas de carne", podem ser interpretadas pelo Gemini; quantidades ou
+   sabores ambíguos devem ser esclarecidos, nunca adivinhados.
+3. **AJUSTAR 3 carne** substitui a quantidade; **REMOVER queijo** retira o produto.
+   **CARRINHO** mostra o resumo e a próxima etapa; **LIMPAR CARRINHO** limpa os itens;
+   **CANCELAR CARRINHO** descarta apenas o rascunho, sem cancelar pedidos registrados.
+4. **FINALIZAR** inicia a coleta de nome, rua, número, bairro em Maringá, complemento,
+   observações e pagamento. **SEM COMPLEMENTO** e **SEM OBSERVAÇÃO** pulam os opcionais.
+   Formas: **PIX**, **DINHEIRO**, **CRÉDITO**, **DÉBITO** ou **A COMBINAR**.
+5. O cliente revisa os itens, valor dos produtos, endereço e pagamento. Pode usar
+   **ALTERAR CARRINHO**, **ALTERAR ENDEREÇO**, **ALTERAR PAGAMENTO**, **ALTERAR NOME** ou
+   **ALTERAR OBSERVAÇÃO**. Alterar itens exige **FINALIZAR** novamente.
+6. Somente **CONFIRMAR PEDIDO**, como mensagem completa na etapa de revisão, registra
+   o pedido. "Sim" ou uma resposta da IA não confirmam. O PDV mostra a origem
+   **Recebido pelo WhatsApp** e usa o mesmo serviço transacional do cardápio: preços
+   reais, estoque, eventos e status inicial em preparo, com pagamento **não pago**.
+
+A equipe confirma disponibilidade, atendimento do endereço, eventual taxa e prazo.
+O valor apresentado é o dos produtos; o fluxo não calcula uma taxa de entrega nem
+faz cobrança online. Agendamento e cupons continuam pelo cardápio/equipe. O pedido
+segue as etapas normais do PDV e pode ser consultado com **STATUS**. Avisos de etapa
+não são autorizados implicitamente: o cliente pode enviar **ATIVAR AVISOS**.
+
+Carrinhos ficam na base privada, vinculados ao número autenticado no webhook e ao
+provedor; sobrevivem a reinícios e expiram após 24 horas sem alterações. A chave
+idempotente por carrinho evita pedidos e consumo de estoque duplicados. Pedido
+registrado não é editado pelo robô: alterações seguem para **ATENDENTE**; outro
+pedido começa com **NOVO PEDIDO**. A pausa humana bloqueia confirmação e respostas
+pendentes do carrinho; **MENU** retoma o robô, preservando o rascunho.
+
+Os dados de nome, endereço e pagamento coletados neste fluxo ficam no PDV. Essas
+mensagens e resumos são excluídos do histórico enviado ao Gemini. O modelo recebe
+somente IDs/quantidades e a etapa do carrinho, além do contexto filtrado das dúvidas.
+Uma resposta de IA atrasada não pode sobrepor uma alteração posterior do carrinho.
+Se os preços mudarem após o resumo, o cliente recebe os novos valores e precisa
+confirmar novamente. Se o estoque não permitir o registro, todos os efeitos da
+ tentativa são revertidos e o carrinho permanece disponível para revisão.
+
+Não há variável ou credencial adicional para ativar esse checkout. Usa a conexão
+existente do WhatsApp e o banco persistente do PDV; preserve ambos no Render.

@@ -17,7 +17,7 @@ from . import evolution
 PENDING = object()
 MODEL = 'gemini-2.5-flash-lite'
 MODEL_PATTERN = r'gemini-(?:[0-9]+(?:\.[0-9]+)?-)?flash-lite(?:-(?:latest|preview(?:-[0-9-]+)?|[0-9]{3}))?'
-INTENTS = ('products', 'menu', 'hours', 'payment', 'delivery', 'order_status', 'handoff', 'unknown', 'conversation')
+INTENTS = ('products', 'menu', 'hours', 'payment', 'delivery', 'order_status', 'handoff', 'unknown', 'conversation', 'cart')
 DIAGNOSTICS = {
     'available': 'Chave e modelo acessíveis. Envie uma pergunta para confirmar uma resposta real da IA.',
     'authentication': 'O Google recusou a chave da IA. Copie a chave gerada no Google AI Studio para SAHARA_AI_API_KEY no PDV; uma senha escolhida não funciona.',
@@ -173,13 +173,22 @@ INSTRUCTIONS = '''Você é o assistente de atendimento da Sahara Esfihas, em por
 Responda diretamente à pergunta, com simpatia, em até 800 caracteres. Pode responder perguntas
 gerais, explicar conceitos e conversar; não repita o menu nem force uma venda em todo assunto.
 Use o histórico recente para entender perguntas como "e a de queijo?" ou "qual delas?".
-Retorne JSON com intent, product_ids (até três IDs do catálogo) e reply (texto da resposta).
+Retorne JSON com intent, product_ids (até três IDs do catálogo), reply (texto da resposta) e cart_items.
+Use cart SOMENTE para uma solicitação explícita de adicionar, ajustar ou remover itens do carrinho.
+Perguntas de preço, sugestões e frases hipotéticas não autorizam mudar o carrinho: use products.
+cart_items deve listar id, quantity (inteiro) e action (add, set ou remove) para cada alteração.
+Não adivinhe quantidades ou sabores ausentes/ambíguos: use unknown e pergunte ao cliente.
+Use remove com quantity 0. Use add para adicionar e set para substituir a quantidade.
+Não repita itens já presentes sem solicitação. Se não for cart, cart_items deve ser [].
+Para confirmar o pedido, o cliente precisa revisar os dados e enviar CONFIRMAR PEDIDO;
+não confirme pedidos nem extraia nome, endereço ou pagamento: esses dados são coletados localmente.
 Use conversation para perguntas gerais e unknown quando precisar pedir esclarecimento.
 Use products para sabores, preços e sugestões; escolha apenas IDs existentes e pertinentes.
 Para citar um produto use {{name:ID}} e para o preço use {{price:ID}}. O PDV substituirá
 esses marcadores por dados atuais. Não escreva valores monetários por conta própria.
 Use menu para montar pedido; hours, payment, delivery e order_status para os demais assuntos da loja.
-Pedidos são finalizados no cardápio; não crie pedidos nem confirme pagamentos pelo chat.
+Pedidos podem ser montados aqui com PEDIR ou no cardápio. O PDV registra somente após
+revisão e confirmação explícita local; a IA não registra pedidos nem confirma pagamentos.
 Use handoff para reclamações, alergias, ingredientes não confirmados, estoque, prazo exato,
 alterações e cancelamentos. Não adivinhe informações da loja que não constem dos dados fornecidos.
 Não afirme que a loja está aberta agora: informe apenas os horários cadastrados.
@@ -242,7 +251,7 @@ def used_today(conn):
             + conn.execute('SELECT COUNT(*) FROM whatsapp_ai_probes WHERE day=?', (day(),)).fetchone()[0])
 
 
-def test_generation(request, identifier):
+def test_generation(request, identifier, scenario='products'):
     """Owner-triggered, quota-bounded preview; never creates a WhatsApp message."""
     cfg = config()
     now = int(time.time())
@@ -261,8 +270,9 @@ def test_generation(request, identifier):
         products = [dict(row) for row in conn.execute('SELECT id,name,category,price_cents FROM products ORDER BY id')]
     result, reason = None, ''
     try:
-        result = interpret('Quais esfihas salgadas você sugere e quanto custam?', products, cfg)
-        if result['intent'] != 'products':
+        question = 'Quero duas de carne e uma de queijo' if scenario == 'cart' else 'Quais esfihas salgadas você sugere e quanto custam?'
+        result = interpret(question, products, cfg)
+        if result['intent'] != scenario:
             reason = 'interpretation'
     except ProviderError as error:
         reason = error.reason
@@ -278,7 +288,18 @@ def test_generation(request, identifier):
         response = {'state': reason or 'generated', 'model': cfg['model'], 'message': messages.get(reason, DIAGNOSTICS.get(reason)) if reason else 'O Gemini interpretou a pergunta. O PDV montou esta resposta com o cardápio.', 'checked_at': utcnow()}
         if not reason:
             try:
-                response['reply'] = render(conn, '', result)
+                if scenario == 'cart':
+                    from . import whatsapp_checkout
+                    changes = result.get('cart_items', [])
+                    whatsapp_checkout.validate_changes(changes, {product['id'] for product in products})
+                    if any(item['action'] != 'add' for item in changes):
+                        raise ValueError('Alteração inválida no teste.')
+                    # A preview is never persisted as a customer cart or order.
+                    response['reply'] = whatsapp_checkout.summary(conn, {'data': {'items': [
+                        {'id': item['id'], 'quantity': item['quantity']} for item in changes]}})
+                    response['message'] = 'O Gemini interpretou os itens. Prévia sem registrar pedido ou enviar mensagem.'
+                else:
+                    response['reply'] = render(conn, '', result)
             except (ValueError, TypeError, KeyError):
                 response = {'state': 'invalid_response', 'model': cfg['model'], 'message': messages['invalid_response'], 'checked_at': utcnow()}
         conn.execute('UPDATE whatsapp_ai_probes SET result_json=? WHERE id=?', (json.dumps(response), identifier))
@@ -326,12 +347,16 @@ def interpret(text, products, cfg):
     schema = {'type': 'OBJECT', 'properties': {
         'intent': {'type': 'STRING', 'enum': list(INTENTS)},
         'product_ids': {'type': 'ARRAY', 'items': {'type': 'STRING'}, 'maxItems': 3}},
-        'required': ['intent', 'product_ids', 'reply']}
+        'required': ['intent', 'product_ids', 'reply', 'cart_items']}
     schema['properties']['reply'] = {'type': 'STRING'}
+    schema['properties']['cart_items'] = {'type': 'ARRAY', 'maxItems': 30, 'items': {
+        'type': 'OBJECT', 'properties': {'id': {'type': 'STRING'}, 'quantity': {'type': 'INTEGER'},
+                                      'action': {'type': 'STRING', 'enum': ['add', 'set', 'remove']}},
+        'required': ['id', 'quantity', 'action']}}
     body = {'systemInstruction': {'parts': [{'text': INSTRUCTIONS}]},
             'contents': [{'role': 'user', 'parts': [{'text': json.dumps(
                 {'message': scrub(text), 'catalog': products,
-                 'history': cfg.get('history', [])}, ensure_ascii=False)}]}],
+                 'history': cfg.get('history', []), 'cart': cfg.get('cart', {'items': []})}, ensure_ascii=False)}]}],
             'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 768,
                                  'responseMimeType': 'application/json', 'responseSchema': schema}}
     request = Request(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
@@ -342,7 +367,7 @@ def interpret(text, products, cfg):
     if candidate.get('finishReason') != 'STOP':
         raise ValueError('Resposta incompleta.')
     result = json.loads(''.join(part.get('text', '') for part in candidate['content']['parts'] if not part.get('thought')))
-    if not isinstance(result, dict) or set(result) not in ({'intent', 'product_ids'}, {'intent', 'product_ids', 'reply'}) or result['intent'] not in INTENTS:
+    if not isinstance(result, dict) or not {'intent', 'product_ids'} <= set(result) or set(result) - {'intent', 'product_ids', 'reply', 'cart_items'} or result['intent'] not in INTENTS:
         raise ValueError('Intenção inválida.')
     identifiers = result['product_ids']
     allowed = {product['id'] for product in products}
@@ -350,6 +375,11 @@ def interpret(text, products, cfg):
         raise ValueError('Produto inválido.')
     if result['intent'] == 'products' and not identifiers:
         raise ValueError('Sugestão vazia.')
+    if result['intent'] == 'cart':
+        from .whatsapp_checkout import validate_changes
+        validate_changes(result.get('cart_items'), allowed)
+    elif result.get('cart_items'):
+        raise ValueError('Alteração de carrinho sem intenção válida.')
     if 'reply' in result:
         validate_reply(result)
     return result
@@ -402,7 +432,7 @@ def render(conn, recipient, result):
 
 
 def process_one(app):
-    from . import whatsapp
+    from . import whatsapp, whatsapp_checkout
     cfg = config()
     request = SimpleNamespace(app=app)
     now = int(time.time())
@@ -429,14 +459,23 @@ def process_one(app):
         if not reason:
             conn.execute('INSERT INTO whatsapp_ai_usage VALUES(?,?,?,?)', (job['id'], job['phone'], day(), now))
         conn.execute("UPDATE whatsapp_ai_jobs SET status='processing',updated_at=? WHERE id=?", (utcnow(), job['id']))
+        cart = whatsapp_checkout.load(conn, job['phone'])
+        cfg['cart_version'] = (cart['id'], cart['revision']) if cart else None
+        latest_checkout = conn.execute('''SELECT MAX(i.created_at) FROM whatsapp_checkout_events e
+                                          JOIN whatsapp_inbound i ON i.id=e.id WHERE i.phone=?''', (job['phone'],)).fetchone()[0]
+        if cart and latest_checkout and job['created_at'] < latest_checkout:
+            cfg['cart_version'] = ('outdated',)
+        cfg['cart'] = {'items': cart['data']['items'], 'stage': cart['stage']} if cart and not cart['expired'] else {'items': []}
         cfg['history'] = [
             {'role': row['role'], 'message': scrub(row['body'])}
             for row in reversed(conn.execute('''SELECT body,role FROM (
                 SELECT body,'user' AS role,created_at,rowid AS sequence FROM whatsapp_inbound
                   WHERE phone=? AND id<>? AND created_at>=? AND created_at<=?
+                    AND id NOT IN (SELECT id FROM whatsapp_checkout_events)
                 UNION ALL
                 SELECT body,'assistant' AS role,created_at,rowid AS sequence FROM whatsapp_outbox
                   WHERE phone=? AND provider=? AND status IN ('accepted','delivered','read')
+                    AND kind<>'checkout_reply'
                     AND created_at>=? AND created_at<=?
                 ) ORDER BY created_at DESC,sequence DESC LIMIT 6''',
                 (job['phone'], job['id'], datetime.fromtimestamp(now - 86400, ZoneInfo('UTC')).isoformat(), job['created_at'],
@@ -461,11 +500,15 @@ def process_one(app):
             status, reason = 'skipped', 'human_or_provider'
         else:
             try:
-                reply = render(conn, job['phone'], result) if result else whatsapp.answer(conn, job['phone'], job['question'], conversational=True)
+                if result and result['intent'] == 'cart':
+                    reply = whatsapp_checkout.apply_model(conn, job['phone'], result['cart_items'], cfg['cart_version'])
+                    conn.execute('INSERT OR IGNORE INTO whatsapp_checkout_events VALUES(?)', (job['id'],))
+                else:
+                    reply = render(conn, job['phone'], result) if result else whatsapp.answer(conn, job['phone'], job['question'], conversational=True)
             except (ValueError, TypeError, KeyError):
                 reply, reason = whatsapp.answer(conn, job['phone'], job['question'], conversational=True), 'provider'
             if reply:
-                kind = 'reply' if result and result['intent'] == 'handoff' else 'ai_reply'
+                kind = 'reply' if result and result['intent'] == 'handoff' else 'checkout_reply' if result and result['intent'] == 'cart' else 'ai_reply'
                 whatsapp.queue(conn, 'reply:' + job['id'], job['phone'], kind, reply)
             status = 'fallback' if reason else 'done'
         conn.execute('UPDATE whatsapp_ai_jobs SET status=?,reason=?,updated_at=? WHERE id=?', (status, reason, utcnow(), job['id']))
