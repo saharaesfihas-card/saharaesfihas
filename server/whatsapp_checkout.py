@@ -19,7 +19,7 @@ PAYMENTS = {'pix': 'Pix', 'dinheiro': 'Dinheiro', 'credito': 'Cartão de crédit
 START = {'pedir', 'novo pedido', 'quero pedir', 'quero fazer um pedido', 'montar pedido'}
 QUESTIONS = {
     'name': 'Qual é o seu nome para o pedido?',
-    'street': 'Qual é a rua ou avenida da entrega? Envie apenas o nome da rua.',
+    'street': 'Qual é o endereço de entrega?',
     'number': 'Qual é o número da casa ou prédio? Se não houver número, envie S/N.',
     'neighborhood': 'Qual é o bairro da entrega em Maringá?',
     'complement': 'Informe complemento ou referência da entrega. Se não houver, envie SEM COMPLEMENTO.',
