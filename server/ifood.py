@@ -84,12 +84,15 @@ def dashboard(request):
 
 
 class ProviderError(Exception):
-    def __init__(self, state):
+    def __init__(self, state, phase=None, http_status=None):
         self.state = state
+        self.phase = phase
+        self.http_status = http_status
         super().__init__(state)
 
 
 def provider_json(request, phase, expected=dict, limit=65536, acknowledgement=False):
+    status = None
     try:
         with evolution.open_url(request, timeout=8) as response:
             raw = response.read(limit + 1)
@@ -97,9 +100,9 @@ def provider_json(request, phase, expected=dict, limit=65536, acknowledgement=Fa
         if len(raw) > limit:
             raise ValueError()
         if acknowledgement:
-            if status not in (200, 204):
+            if status not in (200, 202, 204):
                 raise ValueError()
-            return None
+            return status
         if expected is list and status == 204:
             return []
         data = json.loads(raw)
@@ -111,11 +114,11 @@ def provider_json(request, phase, expected=dict, limit=65536, acknowledgement=Fa
                  401: 'authentication', 403: 'permissions', 404: 'merchant' if phase == 'merchant' else 'order' if phase == 'order' else 'provider',
                  429: 'quota'}.get(error.code, 'provider')
         error.close()
-        raise ProviderError(state) from None
+        raise ProviderError(state, phase, error.code) from None
     except (URLError, TimeoutError, OSError):
-        raise ProviderError('network') from None
+        raise ProviderError('network', phase) from None
     except (ValueError, UnicodeError, RecursionError):
-        raise ProviderError('response') from None
+        raise ProviderError('response', phase, status) from None
 
 
 def access_token(cfg):

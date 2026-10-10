@@ -214,7 +214,7 @@ class IFoodOrderTests(unittest.TestCase):
         self.assertEqual((result['imported'], result['remaining']), (1, 0))
         self.assertEqual(len(self.imported()), 4)
 
-    def test_unconfirmed_ack_response_keeps_pending_event(self):
+    def test_accepted_ack_response_clears_pending_event(self):
         def transport(request, **kwargs):
             response = self.transport(request, **kwargs)
             if request.full_url.endswith('/acknowledgment'):
@@ -222,7 +222,22 @@ class IFoodOrderTests(unittest.TestCase):
             return response
         with patch('server.ifood.evolution.open_url', side_effect=transport):
             result = self.client.post('/api/admin/ifood/import', json={}, headers=self.headers).json()
+        self.assertEqual((result['state'], result['pending_ack'], result['acknowledged']), ('imported', 0, 1))
+        self.assertEqual(result['ack_http_status'], 202)
+        self.assertEqual(len(self.imported()), 1)
+
+    def test_unexpected_ack_response_keeps_pending_event_with_safe_diagnostics(self):
+        def transport(request, **kwargs):
+            response = self.transport(request, **kwargs)
+            if request.full_url.endswith('/acknowledgment'):
+                response.status = 201
+            return response
+        with patch('server.ifood.evolution.open_url', side_effect=transport):
+            result = self.client.post('/api/admin/ifood/import', json={}, headers=self.headers).json()
         self.assertEqual((result['state'], result['pending_ack'], result['acknowledged']), ('partial', 1, 0))
+        self.assertEqual((result['error_phase'], result['http_status']), ('ack', 201))
+        self.assertNotIn(TOKEN, json.dumps(result))
+        self.assertNotIn(SECRET, json.dumps(result))
 
     def test_wrong_merchant_invalid_amounts_and_invalid_quantities_never_ack(self):
         for mutation in ('merchant', 'total', 'negative', 'nan', 'quantity'):

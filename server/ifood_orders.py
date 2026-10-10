@@ -231,7 +231,7 @@ def sync(request, stop=None):
         conn.execute("INSERT INTO ifood_import_state VALUES(1,?,?,'') ON CONFLICT(id) DO UPDATE SET "
                      "fingerprint=excluded.fingerprint,started_at=excluded.started_at,result_json=''", (digest, stamp))
     counts = dict(imported=0, replayed=0, acknowledged=0, unsupported=0, failed=0, remaining=0)
-    state, error_state = 'empty', None
+    state, error_state, error_phase, http_status, ack_status = 'empty', None, None, None, None
     merchant, client = cfg[ifood.REQUIRED[2]].lower(), cfg[ifood.REQUIRED[0]].lower()
     try:
         token = ifood.access_token(cfg)
@@ -272,13 +272,14 @@ def sync(request, stop=None):
             except ifood.ProviderError as error:
                 counts['failed'] += 1
                 error_state = error.state
+                error_phase, http_status = error.phase, error.http_status
                 break
         if not (stop and stop.is_set()):
             with db(request) as conn:
                 pending = [row['event_id'] for row in conn.execute('SELECT event_id FROM ifood_imported_events '
                     'WHERE merchant_id=? AND client_id=? AND acknowledged=0 ORDER BY created_at LIMIT 100', (merchant, client))]
             if pending:
-                ifood.provider_json(URLRequest(EVENTS + '/events/acknowledgment',
+                ack_status = ifood.provider_json(URLRequest(EVENTS + '/events/acknowledgment',
                     data=json.dumps([{'id': identifier} for identifier in pending]).encode(),
                     headers={**headers, 'Content-Type': 'application/json'}), 'ack', acknowledgement=True)
                 with db(request) as conn:
@@ -292,10 +293,15 @@ def sync(request, stop=None):
     except ifood.ProviderError as error:
         state = 'partial' if counts['imported'] else error.state
         error_state = error.state
+        error_phase, http_status = error.phase, error.http_status
     answer = {'state': state, 'message': MESSAGES.get(state, ifood.MESSAGES.get(state, ifood.MESSAGES['response'])),
               **counts, 'checked_at': utcnow()}
     if error_state:
         answer['error'] = ifood.MESSAGES[error_state]
+        answer['error_phase'] = error_phase
+        answer['http_status'] = http_status
+    if ack_status is not None:
+        answer['ack_http_status'] = ack_status
     with db(request) as conn:
         answer['pending_ack'] = conn.execute('SELECT COUNT(*) FROM ifood_imported_events WHERE merchant_id=? AND client_id=? '
                                             'AND acknowledged=0', (merchant, client)).fetchone()[0]

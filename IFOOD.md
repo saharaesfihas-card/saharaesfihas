@@ -50,7 +50,9 @@ O proprietário forneceu as referências oficiais por capturas e texto:
   GET `/orders/{id}`. O proprietário forneceu o exemplo completo com itens,
   opções/customizações, totais, pagamentos, cliente, endereço e agendamento.
 - Confirmação: POST `/events/acknowledgment` no servidor Events, JSON
-  `[ { "id": "ID_DO_EVENTO" } ]`. Apenas respostas HTTP200/204 confirmam envio.
+  `[ { "id": "ID_DO_EVENTO" } ]`. Respostas HTTP200/202/204 confirmam que a
+  requisição foi aceita. HTTP202 indica processamento assíncrono; não representa
+  confirmação de preparo ou entrega do pedido.
 
 A consulta usa os parâmetros padrão, sem inventar filtros obrigatórios. Se o
 provedor exigir parâmetros adicionais, o painel mostra a falha e a consulta deve
