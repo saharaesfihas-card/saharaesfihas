@@ -26,6 +26,8 @@ let aiCheck = { state: 'available', message: 'Chave e modelo acessíveis. Envie 
 let aiTest = { state: 'generated', message: 'O Gemini interpretou a pergunta. O PDV montou esta resposta com o cardápio.', reply: '• Carne — R$ 4,00' }, aiTestError;
 let selectedModel = 'gemini-2.5-flash-lite', modelListError;
 const modelNames = ['gemini-9.1-flash-lite', 'gemini-2.5-flash-lite'];
+let ifoodStatus = { configured: false, missing: ['SAHARA_IFOOD_CLIENT_SECRET'], message: 'Cadastre as variáveis do iFood no serviço do PDV.', last_result: null, orders_enabled: false };
+let ifoodResult = { state: 'verified', message: 'Autenticação e acesso à loja de teste confirmados. O recebimento de pedidos ainda não está ativo.' };
 
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
 async function render(waitWhatsApp = true) {
@@ -91,6 +93,8 @@ async function start() {
       return reply(dashboard);
     }
     if (method !== 'GET') assert.equal(request.headers()['x-sahara-csrf'], csrf, `${endpoint} must use the authenticated CSRF token`);
+    if (endpoint === '/api/admin/ifood') { assert.equal(method, 'GET'); return reply(ifoodStatus); }
+    if (endpoint === '/api/admin/ifood/check') { assert.equal(method, 'POST'); assert.deepEqual(data, {}); return reply(ifoodResult); }
     if (endpoint === '/api/admin/whatsapp/ai/check') {
       assert.equal(method, 'POST'); assert.deepEqual(data, {}); return reply(aiCheck);
     }
@@ -131,6 +135,29 @@ async function run() {
     await page.locator('#workspace:not([hidden])').waitFor();
     await page.locator('#screen[aria-busy="false"]').waitFor();
     assert.equal(await page.locator('#admin-password').inputValue(), '');
+  });
+  await check('iFood configuration shows missing names without secrets or automatic authentication', async () => {
+    await render();
+    await page.getByText(ifoodStatus.message, { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Testar conexão com o iFood', exact: true }).isDisabled(), true);
+    assert.equal(await page.locator('#screen input[type="password"]').count(), 0);
+    assert.equal(requests.some(request => request.endpoint === '/api/admin/ifood/check'), false);
+  });
+  await check('iFood authentication requires an explicit click and does not claim order import', async () => {
+    ifoodStatus = { ...ifoodStatus, configured: true, missing: [], message: 'Variáveis cadastradas.' };
+    await page.getByRole('button', { name: 'Atualizar configuração do iFood', exact: true }).click();
+    await page.getByText('Variáveis cadastradas.', { exact: true }).waitFor();
+    const before = requests.filter(request => request.endpoint === '/api/admin/ifood/check').length;
+    await page.getByRole('button', { name: 'Testar conexão com o iFood', exact: true }).click();
+    await page.getByText(ifoodResult.message, { exact: true }).waitFor();
+    assert.equal(requests.filter(request => request.endpoint === '/api/admin/ifood/check').length, before + 1);
+    assert.equal(requests.filter(request => request.method === 'POST' && request.endpoint === '/api/admin/orders').length, 0);
+  });
+  await check('iFood authentication failure remains visible without hiding the other integrations', async () => {
+    ifoodResult = { state: 'permissions', message: 'O iFood recusou o acesso à loja. Confira as permissões da aplicação.' };
+    await page.getByRole('button', { name: 'Testar conexão com o iFood', exact: true }).click();
+    await page.getByText(ifoodResult.message, { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Verificar IA', exact: true }).waitFor();
   });
   await check('No Evolution server leaves configuration pending with a safe setup checklist', async () => {
     await render();

@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, model_validator
 
-from . import core, whatsapp, whatsapp_ai
+from . import core, whatsapp, whatsapp_ai, ifood
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
 
 class Model(BaseModel):
@@ -130,6 +130,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         operations.initialize(conn)
         marketing.initialize(conn)
         whatsapp.initialize(conn)
+        ifood.initialize(conn)
         for product in catalog:
             conn.execute('INSERT INTO products(id,name,category,price_cents) VALUES(?,?,?,?) '
                          'ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,price_cents=excluded.price_cents',
@@ -173,7 +174,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         entries = [
             ('payments', 'Pagamento online com cartão e Pix', 'Conectar provedor de pagamentos e confirmação por webhook.'),
             ('fiscal', 'Emissão de notas fiscais', 'Configurar dados fiscais e um emissor autorizado.'),
-            ('ifood', 'iFood e Entrega Fácil', 'Habilitar acesso à API da conta da loja no iFood.'),
+            ('ifood', 'iFood: conexão de teste', 'Confira a autenticação na seção iFood. Recebimento de pedidos e Entrega Fácil ainda não estão ativos.'),
             ('f360', 'Gestão financeira F360', 'Conectar conta e integração autorizada da F360.'),
             ('ads', 'Meta Ads, Google Ads, Analytics e GTM', 'Informar os identificadores e configurar as contas da loja.'),
             ('printers', 'Impressão automática em múltiplas impressoras', 'Conectar as impressoras e uma ponte local de impressão. A comanda pode ser impressa pelo navegador.'),
@@ -367,6 +368,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     app.include_router(operations.router)
     app.include_router(marketing.router)
     app.include_router(whatsapp.router)
+    app.include_router(ifood.router)
 
     @app.get('/system-config.js')
     def system_config():

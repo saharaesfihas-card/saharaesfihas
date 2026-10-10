@@ -737,7 +737,32 @@
         }
       } catch (error) { if (version === modelVersion) preview.textContent = error.message; throw error; }
     }), preview, reply, el('p', 'Este teste usa uma consulta da cota do Gemini, com até 3 testes por dia. Não envia mensagens no WhatsApp. Se a conexão interromper, tocar novamente consulta o mesmo teste.', 'help'));
-    screen.append(aiPanel, p, section);
+    const ifoodPanel = panel('iFood · conexão com a loja de teste', 'Confira a autenticação da aplicação centralizada e o acesso à loja autorizada.');
+    const ifoodStatus = el('p', 'Consultando a configuração do iFood…', 'help');
+    ifoodStatus.setAttribute('role', 'status'); ifoodStatus.setAttribute('aria-live', 'polite');
+    const ifoodMissing = el('ul');
+    const ifoodTest = button('Testar conexão com o iFood', async () => {
+      ifoodStatus.textContent = 'Consultando a autenticação e a loja no iFood…';
+      try {
+        const result = await api('/admin/ifood/check', { method: 'POST', body: {} });
+        ifoodStatus.textContent = result.message;
+      } catch (error) { ifoodStatus.textContent = error.message; throw error; }
+    }); ifoodTest.disabled = true;
+    async function refreshIFood() {
+      ifoodTest.disabled = true; ifoodMissing.replaceChildren();
+      try {
+        const result = await api('/admin/ifood');
+        if (generation !== state.generation || !state.csrf) return;
+        ifoodStatus.textContent = result.last_result?.message || result.message;
+        for (const name of list(result, 'missing')) ifoodMissing.append(el('li', name));
+        ifoodTest.disabled = !result.configured;
+      } catch (error) { if (generation === state.generation) ifoodStatus.textContent = error.message; }
+    }
+    ifoodPanel.append(ifoodStatus, ifoodMissing, button('Atualizar configuração do iFood', refreshIFood), ifoodTest,
+      el('p', 'Cadastre SAHARA_IFOOD_CLIENT_ID, SAHARA_IFOOD_CLIENT_SECRET e SAHARA_IFOOD_MERCHANT_ID somente nas variáveis do servidor PDV no Render. Para esta etapa, use SAHARA_IFOOD_ENABLED=1 e SAHARA_IFOOD_ENVIRONMENT=test.', 'help'),
+      el('p', 'Esta verificação consulta apenas a autenticação e a loja. O recebimento de pedidos, a atualização das etapas no iFood e o Entrega Fácil ainda precisam ser implementados e testados.', 'help'));
+    screen.append(aiPanel, ifoodPanel, p, section);
+    void refreshIFood();
     void loadWhatsAppSection(section, generation);
   }
 
