@@ -57,7 +57,19 @@ O proprietário forneceu as referências oficiais por capturas e texto:
 A consulta usa os parâmetros padrão, sem inventar filtros obrigatórios. Se o
 provedor exigir parâmetros adicionais, o painel mostra a falha e a consulta deve
 ser corrigida com base nos Parameters oficiais. Não tente outro host/versão
-automaticamente. Ainda falta validação com um pedido criado no simulador oficial.
+automaticamente.
+
+O primeiro pedido gerado no simulador oficial foi validado em 09/10/2026, às
+23h38 (GMT-3): dois itens, subtotal de R$21,00 e total original de R$27,00,
+com uma única ocorrência no PDV. O iFood aceitou a confirmação do evento com
+HTTP202 e a pendência local foi encerrada após a gravação. O serviço publicado
+usa a correção `a695f5f9b68a09acc1cd4439d5a341c8ab93de4d`; 25 testes de
+conexão/importação passaram antes da publicação. Isso valida a entrada do pedido
+de teste, sem confirmar preparo, despacho ou entrega no iFood.
+
+Para gerar outro pedido, acesse **Pedidos de teste** no menu do iFood Developer
+(`/pt-BR/developer/tests`) e clique em **Gerar pedido de teste** para a loja
+de teste. A área Widgets não é o gerador de pedidos.
 
 A consulta manual exige login, origem válida e CSRF. Abrir/atualizar o painel
 consulta apenas o estado local; não importa pedidos. O botão **Buscar pedidos de
