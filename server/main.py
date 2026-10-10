@@ -1,5 +1,6 @@
 """API e painel privado da operação Sahara; integrações externas não são simuladas."""
 from datetime import datetime, timedelta, timezone
+from contextlib import asynccontextmanager
 import hashlib
 import hmac
 import json
@@ -19,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, model_validator
 
-from . import core, whatsapp, whatsapp_ai, ifood
+from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
 
 class Model(BaseModel):
@@ -116,8 +117,13 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         raise ValueError('Guarde o banco e os dados privados fora do diretório publicado do site.')
     data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     db_path = data_dir / 'sahara.sqlite3'
+    @asynccontextmanager
+    async def lifespan(app):
+        with ifood_orders.worker(app):
+            async with whatsapp.lifespan(app):
+                yield
     app = FastAPI(title='Sahara · Gestão delivery', docs_url=None, redoc_url=None, openapi_url=None,
-                  lifespan=whatsapp.lifespan)
+                  lifespan=lifespan)
     app.state.db_path = db_path
     app.state.admin_password_hash = admin_password_hash if admin_password_hash is not None else os.environ.get('SAHARA_ADMIN_PASSWORD_HASH', '')
     app.state.secure_cookie = secure_cookie if secure_cookie is not None else os.environ.get('SAHARA_COOKIE_SECURE', '1') != '0'
@@ -131,6 +137,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         marketing.initialize(conn)
         whatsapp.initialize(conn)
         ifood.initialize(conn)
+        ifood_orders.initialize(conn)
         for product in catalog:
             conn.execute('INSERT INTO products(id,name,category,price_cents) VALUES(?,?,?,?) '
                          'ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,price_cents=excluded.price_cents',
@@ -174,7 +181,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         entries = [
             ('payments', 'Pagamento online com cartão e Pix', 'Conectar provedor de pagamentos e confirmação por webhook.'),
             ('fiscal', 'Emissão de notas fiscais', 'Configurar dados fiscais e um emissor autorizado.'),
-            ('ifood', 'iFood: conexão de teste', 'Confira a autenticação na seção iFood. Recebimento de pedidos e Entrega Fácil ainda não estão ativos.'),
+            ('ifood', 'iFood: importação de teste', 'A seção iFood permite importar novos pedidos da loja de teste. Etapas, loja real e Entrega Fácil ainda não estão integrados.'),
             ('f360', 'Gestão financeira F360', 'Conectar conta e integração autorizada da F360.'),
             ('ads', 'Meta Ads, Google Ads, Analytics e GTM', 'Informar os identificadores e configurar as contas da loja.'),
             ('printers', 'Impressão automática em múltiplas impressoras', 'Conectar as impressoras e uma ponte local de impressão. A comanda pode ser impressa pelo navegador.'),
@@ -314,6 +321,8 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             order = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
             if not order:
                 raise HTTPException(404, 'Pedido não encontrado.')
+            if order['source'] == 'ifood':
+                raise HTTPException(409, 'Este é um pedido de teste do iFood. Gerencie as etapas no Gestor do iFood; a sincronização de etapas ainda não está ativa.')
             if order['status'] == body.status:
                 return {'order': order_dict(order)}
             if body.status not in TRANSITIONS.get(order['status'], set()):
@@ -341,6 +350,8 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             order = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
             if not order or order['status'] == 'cancelled':
                 raise HTTPException(409, 'Não é possível registrar pagamento para esse pedido.')
+            if order['source'] == 'ifood':
+                raise HTTPException(409, 'O pagamento deste pedido de teste pertence ao iFood e não pode gerar recebimento no caixa local.')
             conn.execute('UPDATE orders SET payment_status=\'paid\' WHERE id=?', (order_id,))
             fresh = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
             operations.record_sale(conn, fresh)
@@ -369,6 +380,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     app.include_router(marketing.router)
     app.include_router(whatsapp.router)
     app.include_router(ifood.router)
+    app.include_router(ifood_orders.router)
 
     @app.get('/system-config.js')
     def system_config():

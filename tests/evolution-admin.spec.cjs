@@ -28,6 +28,9 @@ let selectedModel = 'gemini-2.5-flash-lite', modelListError;
 const modelNames = ['gemini-9.1-flash-lite', 'gemini-2.5-flash-lite'];
 let ifoodStatus = { configured: false, missing: ['SAHARA_IFOOD_CLIENT_SECRET'], message: 'Cadastre as variáveis do iFood no serviço do PDV.', last_result: null, orders_enabled: false };
 let ifoodResult = { state: 'verified', message: 'Autenticação e acesso à loja de teste confirmados. O recebimento de pedidos ainda não está ativo.' };
+let ifoodImport = { import_available: false, automatic: false, last_sync: null, pending_ack: 0 };
+let ifoodImportResult = { state: 'imported', message: 'Pedidos de teste salvos no PDV. Os eventos foram confirmados após a gravação.', imported: 1, acknowledged: 1, pending_ack: 0 };
+let ifoodImportError, fixtureOrders = [];
 
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
 async function render(waitWhatsApp = true) {
@@ -83,7 +86,7 @@ async function start() {
     if (endpoint === '/api/admin/login') { authorized = true; return reply({ csrf_token: csrf }); }
     if (endpoint.startsWith('/api/admin/') && !authorized) return reply({ detail: 'Entre no painel.' }, 401);
     if (endpoint === '/api/admin/session') return reply({ csrf_token: csrf });
-    if (endpoint === '/api/admin/orders') { if (ordersWait) await ordersWait; return reply({ orders: [] }); }
+    if (endpoint === '/api/admin/orders') { if (ordersWait) await ordersWait; return reply({ orders: fixtureOrders }); }
     if (endpoint === '/api/admin/drivers') return reply({ drivers: [] });
     if (endpoint === '/api/integrations') return reply({ integrations: [{ id: 'whatsapp', label: 'WhatsApp · atendimento e avisos de pedidos', available: dashboard.configured, reason: dashboard.configured ? 'Configuração presente. Confira a conexão.' : 'Configure a Evolution API no Render.' }, { id: 'campaigns', label: 'Campanhas', available: false, reason: 'Envio em massa não ativado.' }] });
     if (endpoint === '/api/admin/whatsapp') {
@@ -95,6 +98,11 @@ async function start() {
     if (method !== 'GET') assert.equal(request.headers()['x-sahara-csrf'], csrf, `${endpoint} must use the authenticated CSRF token`);
     if (endpoint === '/api/admin/ifood') { assert.equal(method, 'GET'); return reply(ifoodStatus); }
     if (endpoint === '/api/admin/ifood/check') { assert.equal(method, 'POST'); assert.deepEqual(data, {}); return reply(ifoodResult); }
+    if (endpoint === '/api/admin/ifood/import') {
+      if (method === 'GET') return reply(ifoodImport);
+      assert.equal(method, 'POST'); assert.deepEqual(data, {});
+      return ifoodImportError ? reply({ detail: ifoodImportError }, 503) : reply(ifoodImportResult);
+    }
     if (endpoint === '/api/admin/whatsapp/ai/check') {
       assert.equal(method, 'POST'); assert.deepEqual(data, {}); return reply(aiCheck);
     }
@@ -158,6 +166,51 @@ async function run() {
     await page.getByRole('button', { name: 'Testar conexão com o iFood', exact: true }).click();
     await page.getByText(ifoodResult.message, { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Verificar IA', exact: true }).waitFor();
+  });
+  await check('iFood import is explicit, uses CSRF and reports persisted events without activating production', async () => {
+    assert.equal(requests.some(request => request.endpoint === '/api/admin/ifood/import' && request.method === 'POST'), false);
+    ifoodImport = { ...ifoodImport, import_available: true };
+    await page.getByRole('button', { name: 'Atualizar configuração do iFood', exact: true }).click();
+    const control = page.getByRole('button', { name: 'Buscar pedidos de teste do iFood', exact: true });
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Buscar pedidos de teste do iFood' && !button.disabled));
+    await control.click();
+    await page.getByText(ifoodImportResult.message, { exact: true }).waitFor();
+    assert.equal(requests.filter(request => request.endpoint === '/api/admin/ifood/import' && request.method === 'POST').length, 1);
+    assert.match(await page.locator('#screen').innerText(), /Eventos confirmados: 1/);
+    assert.match(await page.locator('#screen').innerText(), /Loja real, sincronização das etapas e Entrega Fácil continuam pendentes/);
+  });
+  await check('iFood import failure is visible and keeps other controls available', async () => {
+    ifoodImportError = 'Não foi possível consultar os eventos do iFood.';
+    await page.getByRole('button', { name: 'Buscar pedidos de teste do iFood', exact: true }).click();
+    await page.locator('#screen').getByText(ifoodImportError, { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Verificar IA', exact: true }).waitFor();
+    ifoodImportError = undefined;
+  });
+  await check('iFood cards and printed receipts preserve authoritative totals and cannot create local payments or stages', async () => {
+    fixtureOrders = [{ id: 'test-ifood-local', source: 'ifood', status: 'ifood_received', created_at: '2026-10-10T01:00:00Z',
+      customer_name: 'Cliente fictício', customer_phone: '', total_cents: 2945, discount_cents: 325,
+      payment_status: 'external_paid', payment_method: 'iFood · CREDIT',
+      items: [{ name: '<script>Produto externo</script>', quantity: 1.5, price_cents: 1020, total_cents: 2670,
+        options: [{ name: 'Adicional', quantity: 2, customization: [{ name: 'Sem cebola', quantity: 1 }] }], observations: 'Observação do item' }],
+      delivery: { street: 'Rua fictícia', number: '123', neighborhood: 'Bairro fictício', reference: 'Referência fictícia',
+        ifood: { display_id: 'TEST-123', prepaid_cents: 2945, pending_cents: 0, delivery_fee_cents: 500, additional_fees_cents: 100 } } }];
+    await page.locator('#navigation button[data-view="orders"]').click();
+    await page.locator('#screen[aria-busy="false"]').waitFor();
+    const card = page.locator('.order-card');
+    assert.equal(await card.count(), 1);
+    assert.match(await card.innerText(), /TEST-123/);
+    assert.match(await card.innerText(), /26,70/);
+    assert.match(await card.innerText(), /29,45/);
+    assert.match(await card.innerText(), /Sem cebola/);
+    assert.match(await card.innerText(), /Pago ao iFood/);
+    assert.equal(await card.locator('script').count(), 0);
+    assert.equal(await card.getByRole('button', { name: /Registrar pagamento|Atualizar situação|Atribuir entrega/ }).count(), 0);
+    await page.evaluate(() => { window.print = () => {}; });
+    await page.getByRole('button', { name: 'Imprimir comanda', exact: true }).click();
+    assert.match(await page.locator('#print-target').innerText(), /iFood · TESTE/);
+    assert.match(await page.locator('#print-target').innerText(), /26,70/);
+    assert.match(await page.locator('#print-target').innerText(), /Sem cebola/);
+    fixtureOrders = [];
   });
   await check('No Evolution server leaves configuration pending with a safe setup checklist', async () => {
     await render();

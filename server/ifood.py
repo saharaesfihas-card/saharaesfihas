@@ -31,7 +31,9 @@ MESSAGES = {
     'network': 'Não foi possível consultar o iFood. Confira a conexão do servidor.',
     'response': 'O iFood devolveu uma resposta inesperada. A conexão não foi confirmada.',
     'wait': 'Aguarde 30 segundos entre os testes de conexão do iFood.',
-    'verified': 'Autenticação e acesso à loja de teste confirmados. O recebimento de pedidos ainda não está ativo.',
+    'request': 'O iFood recusou a consulta de eventos. Confira os parâmetros exigidos na documentação.',
+    'order': 'O pedido não foi encontrado ou não está acessível por esta aplicação.',
+    'verified': 'Autenticação e acesso à loja de teste confirmados. Consulte a importação de pedidos de teste abaixo.',
 }
 
 
@@ -87,19 +89,26 @@ class ProviderError(Exception):
         super().__init__(state)
 
 
-def provider_json(request, phase):
+def provider_json(request, phase, expected=dict, limit=65536, acknowledgement=False):
     try:
         with evolution.open_url(request, timeout=8) as response:
-            raw = response.read(65537)
-        if len(raw) > 65536:
+            raw = response.read(limit + 1)
+            status = getattr(response, 'status', 200)
+        if len(raw) > limit:
             raise ValueError()
+        if acknowledgement:
+            if status not in (200, 204):
+                raise ValueError()
+            return None
+        if expected is list and status == 204:
+            return []
         data = json.loads(raw)
-        if not isinstance(data, dict):
+        if not isinstance(data, expected):
             raise ValueError()
         return data
     except HTTPError as error:
-        state = {400: 'authentication' if phase == 'token' else 'merchant',
-                 401: 'authentication', 403: 'permissions', 404: 'merchant' if phase == 'merchant' else 'provider',
+        state = {400: 'authentication' if phase == 'token' else 'merchant' if phase == 'merchant' else 'request',
+                 401: 'authentication', 403: 'permissions', 404: 'merchant' if phase == 'merchant' else 'order' if phase == 'order' else 'provider',
                  429: 'quota'}.get(error.code, 'provider')
         error.close()
         raise ProviderError(state) from None
@@ -107,6 +116,18 @@ def provider_json(request, phase):
         raise ProviderError('network') from None
     except (ValueError, UnicodeError, RecursionError):
         raise ProviderError('response') from None
+
+
+def access_token(cfg):
+    payload = urlencode({'grantType': 'client_credentials', 'clientId': cfg[REQUIRED[0]],
+                         'clientSecret': cfg[REQUIRED[1]]}).encode()
+    auth = provider_json(URLRequest(HOST + '/authentication/v1.0/oauth/token', data=payload,
+        headers={'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'}), 'token')
+    token = auth.get('accessToken')
+    if (not isinstance(token, str) or not re.fullmatch(r'[!-~]{1,4096}', token)
+            or str(auth.get('type', 'Bearer')).lower() != 'bearer'):
+        raise ProviderError('response')
+    return token
 
 
 def check(request):
@@ -128,14 +149,7 @@ def check(request):
                      'ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint, '
                      'started_at=excluded.started_at,result_json=\'\'', (digest, stamp))
     try:
-        payload = urlencode({'grantType': 'client_credentials', 'clientId': cfg[REQUIRED[0]],
-                             'clientSecret': cfg[REQUIRED[1]]}).encode()
-        auth = provider_json(URLRequest(HOST + '/authentication/v1.0/oauth/token', data=payload,
-            headers={'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'}), 'token')
-        token = auth.get('accessToken')
-        if (not isinstance(token, str) or not re.fullmatch(r'[!-~]{1,4096}', token)
-                or str(auth.get('type', 'Bearer')).lower() != 'bearer'):
-            raise ProviderError('response')
+        token = access_token(cfg)
         merchant = provider_json(URLRequest(HOST + '/merchant/v1.0/merchants/' + cfg[REQUIRED[2]].lower(),
             headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}), 'merchant')
         if not isinstance(merchant.get('id'), str) or merchant['id'].lower() != cfg[REQUIRED[2]].lower():

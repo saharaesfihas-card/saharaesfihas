@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const state = { csrf: null, view: 'orders', catalog: [], customers: [], drivers: [], orderFilter: 'active', orderQuery: '', generation: 0, fieldIds: new Map() };
   const stages = [['preparing', 'Em preparo na cozinha'], ['ready', 'Pedido pronto'], ['out_for_delivery', 'A caminho do endereço'], ['delivered', 'Entregue']];
-  const statuses = { ...Object.fromEntries(stages), new: 'Em preparo na cozinha', confirmed: 'Em preparo na cozinha', cancelled: 'Cancelado' };
+  const statuses = { ...Object.fromEntries(stages), new: 'Em preparo na cozinha', confirmed: 'Em preparo na cozinha', cancelled: 'Cancelado', ifood_received: 'iFood · recebido em teste' };
   const stageKey = status => ['new', 'confirmed'].includes(status) ? 'preparing' : status;
   const transitions = { new: ['preparing', 'cancelled'], confirmed: ['preparing', 'cancelled'], preparing: ['ready', 'cancelled'], ready: ['out_for_delivery', 'cancelled'], out_for_delivery: ['delivered', 'cancelled'], delivered: [], cancelled: [] };
   const views = {
@@ -30,6 +30,15 @@
   ];
   const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const money = cents => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((Number(cents) || 0) / 100);
+  const paymentLabel = order => ({ paid: 'Pago', external_paid: 'Pago ao iFood', external_pending: 'Pagamento conforme iFood' }[order.payment_status] || 'A receber');
+  const itemTotal = item => item.total_cents ?? item.price_cents * item.quantity;
+  function appendOptions(target, item) {
+    for (const option of item.options || []) {
+      target.append(el('p', `${option.quantity} × ${option.name}${option.group_name ? ` · ${option.group_name}` : ''}`, 'order-meta'));
+      for (const choice of option.customization || []) target.append(el('p', `↳ ${choice.quantity} × ${choice.name}`, 'order-meta'));
+    }
+    if (item.observations) target.append(el('p', `Observação do item: ${item.observations}`, 'order-notes'));
+  }
   const date = value => value && !Number.isNaN(new Date(value).getTime()) ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value)) : '—';
   const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0;
   const cents = value => Math.round(numeric(value) * 100);
@@ -79,7 +88,7 @@
     if (!readOnly && state.csrf) headers['X-Sahara-CSRF'] = state.csrf;
     const controller = new AbortController();
     // Evolution checks may make two provider calls; pairing may make six.
-    const timeout = path === '/admin/whatsapp/connect' ? 100000 : path === '/admin/whatsapp' ? 35000 : 20000;
+    const timeout = path === '/admin/whatsapp/connect' ? 100000 : path === '/admin/ifood/import' && method === 'POST' ? 60000 : path === '/admin/whatsapp' ? 35000 : 20000;
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
       const response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', signal: controller.signal, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
@@ -316,7 +325,7 @@
     const searchWrap = el('div', undefined, 'search-field');
     const search = el('input'); search.type = 'search'; search.placeholder = 'Buscar cliente, telefone ou pedido'; search.value = state.orderQuery;
     search.setAttribute('aria-label', 'Buscar pedidos'); searchWrap.append(icon('search'), search);
-    const select = selection('Filtrar pedidos por situação', [['active', 'Em andamento'], ['all', 'Todos os pedidos'], ...stages, ['cancelled', 'Cancelado']], () => { state.orderFilter = select.value; renderView(); });
+    const select = selection('Filtrar pedidos por situação', [['active', 'Em andamento'], ['all', 'Todos os pedidos'], ...stages, ['ifood_received', 'iFood · recebidos em teste'], ['cancelled', 'Cancelado']], () => { state.orderFilter = select.value; renderView(); });
     select.value = state.orderFilter;
     toolbar.append(searchWrap, select); screen.append(toolbar);
     const count = el('p', undefined, 'order-count'); count.setAttribute('role', 'status'); screen.append(count);
@@ -325,34 +334,46 @@
     const cards = el('div', undefined, 'cards');
     const searchable = [];
     for (const order of orders) {
+      const fromIFood = order.source === 'ifood';
+      const ifood = order.delivery?.ifood || {};
       const card = el('article', undefined, 'order-card'); card.dataset.status = stageKey(order.status);
       const top = el('div', undefined, 'order-top');
-      const heading = el('h2', `Pedido #${order.id.slice(0, 8).toUpperCase()}`, 'order-id'); heading.title = `Pedido #${order.id}`; heading.setAttribute('aria-label', `Pedido ${order.id}`);
+      const heading = el('h2', `Pedido #${ifood.display_id || order.id.slice(0, 8).toUpperCase()}`, 'order-id'); heading.title = `Pedido #${order.id}`; heading.setAttribute('aria-label', `Pedido ${order.id}`);
       top.append(heading, badge(statuses[order.status] || order.status, `status-${stageKey(order.status)}`)); card.append(top);
-      if (order.status !== 'cancelled') card.append(orderProgress(order.status));
+      if (fromIFood) card.append(el('p', 'iFood · loja de teste. Confira e gerencie as etapas no Gestor do iFood.', 'badge warning'));
+      else if (order.status !== 'cancelled') card.append(orderProgress(order.status));
       const customer = el('div', undefined, 'order-customer');
       const customerText = el('div'); customerText.append(el('p', order.customer_name || 'Cliente', 'customer-name'));
       if (order.customer_phone) customerText.append(el('p', order.customer_phone, 'order-meta'));
       customer.append(icon('person'), customerText); card.append(customer);
       card.append(el('p', `Recebido: ${date(order.created_at)}`, 'order-meta'));
       if (order.requested_for) card.append(el('p', `Agendado: ${date(order.requested_for)}`, 'badge warning'));
+      if (ifood.schedule_end) card.append(el('p', `Janela de entrega até: ${date(ifood.schedule_end)}`, 'order-meta'));
       const items = el('ul', undefined, 'order-items');
       for (const item of order.items || []) {
         const line = el('li', undefined, 'order-line');
-        line.append(el('span', `${item.quantity}×`, 'order-quantity'), el('span', item.name), el('strong', money(item.price_cents * item.quantity), 'item-total')); items.append(line);
+        const description = el('div'); description.append(el('span', item.name)); appendOptions(description, item);
+        line.append(el('span', `${item.quantity}×`, 'order-quantity'), description, el('strong', money(itemTotal(item)), 'item-total')); items.append(line);
       }
       card.append(items);
       const address = order.delivery || {};
       const addressLine = el('p', undefined, 'order-address'); addressLine.append(icon('geo-alt'), el('span', [address.street, address.number, address.neighborhood, address.complement].filter(Boolean).join(', ') || 'Endereço não informado')); card.append(addressLine);
+      if (fromIFood) {
+        if (address.city || address.state) card.append(el('p', [address.city, address.state, address.postal_code].filter(Boolean).join(' · '), 'order-meta'));
+        if (address.reference) card.append(el('p', `Referência: ${address.reference}`, 'order-meta'));
+        card.append(el('p', `Taxa de entrega: ${money(ifood.delivery_fee_cents)} · Taxas adicionais: ${money(ifood.additional_fees_cents)}`, 'order-meta'));
+        card.append(el('p', `Pago ao iFood: ${money(ifood.prepaid_cents)} · Pendente: ${money(ifood.pending_cents)}`, 'order-meta'));
+        if (ifood.delivered_by) card.append(el('p', `Entrega: ${ifood.delivered_by}`, 'order-meta'));
+      }
       if (address.location && Number.isFinite(Number(address.location.latitude)) && Number.isFinite(Number(address.location.longitude))) {
         const link = el('a', 'Abrir ponto de entrega ↗'); link.href = `https://www.google.com/maps?q=${encodeURIComponent(address.location.latitude)},${encodeURIComponent(address.location.longitude)}`; link.target = '_blank'; link.rel = 'noopener noreferrer'; card.append(link);
       }
       if (order.notes) card.append(el('p', `Observação: ${order.notes}`, 'order-notes'));
-      if (order.discount_cents) card.append(el('p', `Desconto: ${money(order.discount_cents)}`, 'order-meta'));
+      if (order.discount_cents) card.append(el('p', `${fromIFood ? 'Benefícios do iFood' : 'Desconto'}: ${money(order.discount_cents)}`, 'order-meta'));
       const total = el('p', undefined, 'order-total'); total.append(el('span', 'Total do pedido'), el('strong', money(order.total_cents))); card.append(total);
-      card.append(el('p', `${order.payment_method || 'Pagamento'} · ${order.payment_status === 'paid' ? 'Pago' : 'A receber'}`, 'order-meta'));
+      card.append(el('p', `${order.payment_method || 'Pagamento'} · ${paymentLabel(order)}`, 'order-meta'));
       const actions = el('div', undefined, 'order-actions');
-      const nextStatuses = transitions[order.status] || [];
+      const nextStatuses = fromIFood ? [] : transitions[order.status] || [];
       if (nextStatuses.length) {
         const statusSelect = selection(`Próxima situação do pedido ${order.id}`, nextStatuses.map(key => [key, statuses[key]]));
         actions.append(statusSelect, button('Atualizar situação', async () => {
@@ -360,18 +381,18 @@
           await saved(`/admin/orders/${encodeURIComponent(order.id)}`, { status: statusSelect.value }, 'Situação do pedido atualizada.', 'PATCH');
         }, 'small-button status-action'));
       }
-      if (order.payment_status !== 'paid' && order.status !== 'cancelled') actions.append(button('Registrar pagamento', async () => {
+      if (!fromIFood && order.payment_status !== 'paid' && order.status !== 'cancelled') actions.append(button('Registrar pagamento', async () => {
         if (!window.confirm(`Confirmar que o pagamento de ${money(order.total_cents)} do pedido #${order.id} foi recebido?`)) return;
         await saved(`/admin/orders/${encodeURIComponent(order.id)}/payment`, { status: 'paid' }, 'Pagamento recebido e registrado.');
       }));
       actions.append(button('Imprimir comanda', () => printOrder(order)));
       const drivers = selection(`Entregador do pedido ${order.id}`, [['', 'Escolher entregador'], ...state.drivers.filter(driver => driver.active !== false).map(driver => [driver.id, driver.name])]);
       drivers.value = String(order.courier_id || '');
-      if (state.drivers.length && !['delivered', 'cancelled'].includes(order.status)) actions.append(drivers, button('Atribuir entrega', async () => {
+      if (!fromIFood && state.drivers.length && !['delivered', 'cancelled'].includes(order.status)) actions.append(drivers, button('Atribuir entrega', async () => {
         await saved(`/admin/orders/${encodeURIComponent(order.id)}/driver`, { driver_id: drivers.value || null }, drivers.value ? 'Entregador atribuído.' : 'Entregador removido.', 'PATCH');
       }));
       card.append(actions); cards.append(card);
-      searchable.push([card, normalize([order.id, order.customer_name, order.customer_phone].join(' '))]);
+      searchable.push([card, normalize([order.id, ifood.order_id, ifood.display_id, order.customer_name, order.customer_phone].join(' '))]);
     }
     const empty = emptyState('Nenhum pedido por aqui', 'Os pedidos recebidos pelo cardápio ou registrados no PDV aparecerão nesta área.');
     screen.append(cards, empty);
@@ -388,16 +409,19 @@
 
   function printOrder(order) {
     const target = $('print-target'); target.replaceChildren();
+    const ifood = order.delivery?.ifood;
     target.append(el('h1', 'SAHARA ESFIHAS'), el('p', 'Somente delivery · (44) 99174-8318'), el('hr'), el('h2', `Pedido #${order.id}`), el('p', date(order.created_at)));
     if (order.requested_for) target.append(el('p', `Agendado: ${date(order.requested_for)}`));
+    if (ifood) target.append(el('p', `iFood · TESTE · Pedido ${ifood.display_id || ifood.order_id}`), el('p', 'Etapas e entrega devem ser conferidas no Gestor do iFood.'));
     target.append(el('p', `${order.customer_name || 'Cliente'} · ${order.customer_phone || ''}`));
     const address = order.delivery || {};
     target.append(el('p', [address.street, address.number, address.neighborhood, address.complement].filter(Boolean).join(', ')), el('hr'));
     if (address.location && Number.isFinite(address.location.latitude) && Number.isFinite(address.location.longitude)) target.append(el('p', `Localização: https://www.google.com/maps?q=${address.location.latitude},${address.location.longitude}`));
-    for (const item of order.items || []) { const line = el('p', undefined, 'receipt-line'); line.append(el('span', `${item.quantity} × ${item.name}`), el('span', money(item.quantity * item.price_cents))); target.append(line); }
+    for (const item of order.items || []) { const line = el('p', undefined, 'receipt-line'); line.append(el('span', `${item.quantity} × ${item.name}`), el('span', money(itemTotal(item)))); target.append(line); appendOptions(target, item); }
+    if (ifood) target.append(el('p', `Entrega: ${money(ifood.delivery_fee_cents)} · Taxas adicionais: ${money(ifood.additional_fees_cents)}`), el('p', `Pago ao iFood: ${money(ifood.prepaid_cents)} · Pendente: ${money(ifood.pending_cents)}`));
     if (order.notes) target.append(el('p', `Observação: ${order.notes}`));
     if (order.discount_cents) target.append(el('p', `Desconto: ${money(order.discount_cents)}`));
-    target.append(el('hr'), el('strong', `TOTAL ${money(order.total_cents)}`), el('p', `${order.payment_method} · ${order.payment_status === 'paid' ? 'Pago' : 'A receber'}`));
+    target.append(el('hr'), el('strong', `TOTAL ${money(order.total_cents)}`), el('p', `${order.payment_method} · ${paymentLabel(order)}`));
     window.print();
   }
 
@@ -566,7 +590,7 @@
 
   async function loadReceivables(screen) {
     const [data, orderData] = await Promise.all([api('/admin/receivables'), api('/admin/orders')]); const rows = list(data, 'receivables');
-    const availableOrders = list(orderData, 'orders').filter(order => order.status !== 'cancelled' && order.payment_status !== 'paid' && !rows.some(row => row.order_id === order.id));
+    const availableOrders = list(orderData, 'orders').filter(order => order.source !== 'ifood' && order.status !== 'cancelled' && order.payment_status !== 'paid' && !rows.some(row => row.order_id === order.id));
     const p = panel('Valores a receber'); p.append(table('Fiado', [['Cliente', row => row.customer_name], ['Descrição', row => row.description], ['Valor', row => money(row.amount_cents)], ['Recebido', row => money(row.paid_cents)], ['Em aberto', row => money(row.balance_cents ?? row.amount_cents - (row.paid_cents || 0))]], rows)); screen.append(p);
     const add = panel('Registrar fiado'); const f = createForm('Registrar valor a receber', data => saved('/admin/receivables', { customer_name: get(data, 'customer_name'), phone: get(data, 'phone'), description: get(data, 'description'), amount_cents: cents(get(data, 'amount')), due_date: get(data, 'due_date') || null, order_id: get(data, 'order_id') || null }, 'Valor a receber registrado.'));
     field(f.grid, 'customer_name', 'Nome do cliente', { required: true, maxLength: 100 }); field(f.grid, 'phone', 'Telefone', { type: 'tel', maxLength: 25 }); field(f.grid, 'amount', 'Valor (R$)', { type: 'number', min: '0.01', step: '0.01', required: true }); field(f.grid, 'due_date', 'Vencimento (opcional)', { type: 'date' }); field(f.grid, 'description', 'Descrição', { required: true, wide: true, maxLength: 300 }); add.append(f.form); screen.append(add);
@@ -746,8 +770,33 @@
       try {
         const result = await api('/admin/ifood/check', { method: 'POST', body: {} });
         ifoodStatus.textContent = result.message;
+        void refreshIFoodImport();
       } catch (error) { ifoodStatus.textContent = error.message; throw error; }
     }); ifoodTest.disabled = true;
+    const importStatus = el('p', 'Consultando a importação de teste…', 'help');
+    importStatus.setAttribute('role', 'status'); importStatus.setAttribute('aria-live', 'polite');
+    const importCounters = el('p', '', 'help');
+    const automaticStatus = el('p', '', 'help');
+    function showImportResult(result) {
+      importStatus.textContent = [result.message, result.error].filter(Boolean).join(' ');
+      importCounters.textContent = `Importados: ${result.imported || 0} · Já recebidos: ${result.replayed || 0} · Eventos confirmados: ${result.acknowledged || 0} · Confirmações pendentes: ${result.pending_ack || 0} · Eventos não implementados: ${result.unsupported || 0} · Falhas: ${result.failed || 0} · Próxima consulta: ${result.remaining || 0}`;
+    }
+    const importButton = button('Buscar pedidos de teste do iFood', async () => {
+      importStatus.textContent = 'Buscando eventos e salvando pedidos de teste…';
+      try { showImportResult(await api('/admin/ifood/import', { method: 'POST', body: {} })); }
+      catch (error) { importStatus.textContent = error.message; throw error; }
+    }); importButton.disabled = true;
+    async function refreshIFoodImport() {
+      importButton.disabled = true;
+      try {
+        const result = await api('/admin/ifood/import');
+        if (generation !== state.generation || !state.csrf) return;
+        importButton.disabled = !result.import_available;
+        automaticStatus.textContent = result.automatic ? 'Consulta automática de pedidos de teste ativa no servidor.' : 'Consulta automática desativada. Ative SAHARA_IFOOD_IMPORT_ENABLED=1 no servidor para consultar a cada minuto.';
+        if (result.last_sync) showImportResult(result.last_sync);
+        else importStatus.textContent = result.import_available ? 'Conexão verificada. Busque os pedidos da loja de teste.' : 'Teste primeiro a conexão com o iFood.';
+      } catch (error) { if (generation === state.generation) importStatus.textContent = error.message; }
+    }
     async function refreshIFood() {
       ifoodTest.disabled = true; ifoodMissing.replaceChildren();
       try {
@@ -756,11 +805,14 @@
         ifoodStatus.textContent = result.last_result?.message || result.message;
         for (const name of list(result, 'missing')) ifoodMissing.append(el('li', name));
         ifoodTest.disabled = !result.configured;
+        void refreshIFoodImport();
       } catch (error) { if (generation === state.generation) ifoodStatus.textContent = error.message; }
     }
     ifoodPanel.append(ifoodStatus, ifoodMissing, button('Atualizar configuração do iFood', refreshIFood), ifoodTest,
       el('p', 'Cadastre SAHARA_IFOOD_CLIENT_ID, SAHARA_IFOOD_CLIENT_SECRET e SAHARA_IFOOD_MERCHANT_ID somente nas variáveis do servidor PDV no Render. Para esta etapa, use SAHARA_IFOOD_ENABLED=1 e SAHARA_IFOOD_ENVIRONMENT=test.', 'help'),
-      el('p', 'Esta verificação consulta apenas a autenticação e a loja. O recebimento de pedidos, a atualização das etapas no iFood e o Entrega Fácil ainda precisam ser implementados e testados.', 'help'));
+      el('p', 'Esta verificação consulta apenas a autenticação e a loja.', 'help'),
+      el('h3', 'Pedidos da loja de teste'), importButton, importStatus, importCounters, automaticStatus,
+      el('p', 'Importa novos pedidos de delivery com os valores do iFood e confirma os eventos após salvar. Os pedidos aparecem em Pedidos e cozinha como testes. Etapas, cancelamentos, recebimentos e entregas devem ser gerenciados no Gestor do iFood. Loja real, sincronização das etapas e Entrega Fácil continuam pendentes.', 'help'));
     screen.append(aiPanel, ifoodPanel, p, section);
     void refreshIFood();
     void loadWhatsAppSection(section, generation);

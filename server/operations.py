@@ -508,6 +508,8 @@ def create_receivable(payload: ReceivableInput, request: Request):
     with db(request) as conn:
         if payload.order_id:
             order = _found(conn, "orders", payload.order_id, "Pedido não encontrado.")
+            if order['source'] == 'ifood':
+                raise HTTPException(409, 'Um pedido de teste do iFood não pode gerar fiado local.')
             if order["payment_status"] == "paid":
                 raise HTTPException(409, "Este pedido já está pago.")
             if order["status"] in ("cancelled", "canceled"):
@@ -640,6 +642,8 @@ def save_driver(payload: DriverInput, request: Request):
 def assign_driver(order_id: str, payload: DriverAssignment, request: Request):
     with db(request) as conn:
         order = _found(conn, "orders", order_id, "Pedido não encontrado.")
+        if order['source'] == 'ifood':
+            raise HTTPException(409, 'Gerencie a entrega deste pedido de teste no Gestor do iFood.')
         if order["status"] in ("delivered", "cancelled", "canceled"):
             raise HTTPException(409, "Não é possível alterar o entregador de um pedido encerrado.")
         if payload.driver_id:
