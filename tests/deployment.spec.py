@@ -78,7 +78,7 @@ def main():
         base = 'http://' + mapping
         ready()
         products, _ = request('/api/catalog')
-        assert len(products['products']) == 55
+        assert len(products['products']) == 56
         for product in products['products']:
             if product['id'] == 'carne':
                 assert product['price_cents'] == 400
