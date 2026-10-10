@@ -2,8 +2,11 @@
 
 O robô conectado por QR Code pode usar um modelo de texto **Gemini Flash-Lite** para
 interpretar mensagens em linguagem natural e selecionar sugestões do cardápio.
-O modelo retorna somente a intenção e IDs de produtos. O PDV monta o texto com
-nomes e preços cadastrados; não publica texto livre gerado pelo modelo.
+O modelo retorna a intenção, IDs de produtos e uma resposta natural. Perguntas
+gerais também recebem respostas, sem repetir o menu. Nomes e preços são marcadores
+substituídos pelo PDV com os dados atuais; valores monetários e links livres são
+recusados. As respostas oficiais de horários, pagamento, entrega e status
+continuam vindo das regras da loja.
 
 O atendimento é especializado em delivery: sugestões de sabores e bebidas,
 cardápio, funcionamento, formas de pagamento, orientações para informar o endereço
@@ -90,7 +93,8 @@ redirecionamentos não recebem a chave.
 
 O Gemini recebe o catálogo e até 800 caracteres da mensagem atual, com filtro de
 telefones, e-mails, URLs e trechos de endereço. Não recebe o número do WhatsApp,
-cadastro do cliente, histórico de conversa, pedidos ou pagamentos. O filtro não
+cadastro do cliente, registros de pedidos ou pagamentos. Recebe apenas o histórico
+recente filtrado da própria conversa, conforme descrito abaixo. O filtro não
 garante remover todos os dados pessoais escritos em linguagem livre. Consulte os
 [termos do Gemini](https://ai.google.dev/gemini-api/terms), inclusive o tratamento
 de conteúdo no plano gratuito, antes de ativar o atendimento da loja.
@@ -144,3 +148,9 @@ Não ative cobrança para resolver uma cota gratuita indisponível.
 
 Referências: [SDK oficial](https://github.com/googleapis/python-genai),
 [respostas estruturadas](https://ai.google.dev/gemini-api/docs/structured-output).
+
+O modelo recebe até seis mensagens recentes da mesma conversa, dentro das últimas
+24 horas, incluindo respostas já aceitas pelo WhatsApp. Contatos, números longos
+e endereços são removidos desse contexto. Não recebe conversas de outros clientes.
+Respostas gerais podem conter imprecisões; informações atuais sem fonte devem ser
+tratadas como incertas. Não há navegação na internet nem execução de ações pela IA.

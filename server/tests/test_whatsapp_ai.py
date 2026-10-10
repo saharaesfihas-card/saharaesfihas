@@ -141,6 +141,60 @@ class DeliveryAITests(unittest.TestCase):
         self.assertIn('Me diga o que você precisa', reply)
         self.assertNotIn('1 —', reply)
 
+    def test_general_question_sends_generated_answer_instead_of_menu(self):
+        self.inbound('Por que o céu é azul?')
+        result = {'intent': 'conversation', 'product_ids': [],
+                  'reply': 'O céu parece azul porque o ar espalha mais a luz azul do Sol.'}
+        with patch.object(evolution, 'open_url', return_value=self.response(result)):
+            self.assertTrue(ai.process_one(self.app))
+        self.assertEqual(self.rows('whatsapp_outbox')[0]['body'], result['reply'])
+        self.assertEqual(self.rows('whatsapp_ai_jobs')[0]['status'], 'done')
+
+    def test_natural_product_answer_substitutes_current_price_after_generation(self):
+        self.inbound('Quanto custa a de carne?')
+        def generate(*args):
+            with db(self.request) as conn:
+                conn.execute("UPDATE products SET price_cents=550 WHERE id='carne'")
+            return {'intent': 'products', 'product_ids': ['carne'],
+                    'reply': 'A esfiha de {{name:carne}} custa {{price:carne}}. Quer escolher mais um sabor?'}
+        with patch.object(ai, 'interpret', side_effect=generate):
+            self.assertTrue(ai.process_one(self.app))
+        self.assertEqual(self.rows('whatsapp_outbox')[0]['body'],
+                         'A esfiha de Carne custa R$ 5,50. Quer escolher mais um sabor?')
+
+    def test_invalid_prices_links_or_product_markers_never_reach_customer(self):
+        for reply in ['A carne custa R$ 1,00.', 'A carne custa 1 real.',
+                      '{{price:produto-inexistente}}', 'Pague em https://outra.example',
+                      '{{price:carne}', 'A carne custa 1,00.']:
+            self.inbound('Quanto custa a carne?')
+            result = {'intent': 'products', 'product_ids': ['carne'], 'reply': reply}
+            with patch.object(evolution, 'open_url', return_value=self.response(result)):
+                self.assertTrue(ai.process_one(self.app))
+            self.assertEqual(self.rows('whatsapp_ai_jobs')[-1]['status'], 'fallback')
+            self.assertNotEqual(self.rows('whatsapp_outbox')[-1]['body'], reply)
+
+    def test_recent_history_is_private_bounded_and_includes_sent_answer(self):
+        self.inbound('Sugira carne. contato pessoa@example.com 44999999999')
+        with patch.object(ai, 'interpret', return_value={'intent': 'products', 'product_ids': ['carne']}):
+            ai.process_one(self.app)
+        with db(self.request) as conn:
+            conn.execute("UPDATE whatsapp_outbox SET status='accepted'")
+        self.inbound('Mensagem privada de outra pessoa', phone='5544888888888')
+        with patch.object(ai, 'interpret', return_value={'intent': 'conversation', 'product_ids': [], 'reply': 'Olá!'}):
+            ai.process_one(self.app)
+        self.inbound('E a de queijo?')
+        result = {'intent': 'products', 'product_ids': ['queijo'],
+                  'reply': '{{name:queijo}} custa {{price:queijo}}.'}
+        with patch.object(evolution, 'open_url', return_value=self.response(result)) as transport:
+            ai.process_one(self.app)
+        payload = json.loads(transport.call_args.args[0].data)
+        history = json.loads(payload['contents'][0]['parts'][0]['text'])['history']
+        self.assertLessEqual(len(history), 6)
+        self.assertTrue(any(row['role'] == 'assistant' and 'Carne' in row['message'] for row in history))
+        self.assertNotIn('Mensagem privada', json.dumps(history))
+        self.assertNotIn('pessoa@example.com', json.dumps(history))
+        self.assertNotIn('44999999999', json.dumps(history))
+
     def test_transport_is_bounded_structured_redacted_and_has_no_customer_identity(self):
         self.inbound('Sugira sabores. Meu email é pessoa@example.com e telefone 44999999999, rua Particular 123')
         with patch.object(evolution, 'open_url', return_value=self.response({'intent': 'products', 'product_ids': ['carne', 'queijo']})) as transport:
@@ -151,10 +205,10 @@ class DeliveryAITests(unittest.TestCase):
         self.assertEqual(request.get_header('X-goog-api-key'), 'gemini-private-test')
         payload = json.loads(request.data)
         user = json.loads(payload['contents'][0]['parts'][0]['text'])
-        self.assertEqual(set(user), {'message', 'catalog'})
+        self.assertEqual(set(user), {'message', 'catalog', 'history'})
         for secret in [self.phone, '44999999999', 'pessoa@example.com', 'Particular', 'gemini-private-test', 'evolution-private-test']:
             self.assertNotIn(secret, request.data.decode())
-        self.assertEqual(payload['generationConfig']['maxOutputTokens'], 256)
+        self.assertEqual(payload['generationConfig']['maxOutputTokens'], 768)
         self.assertEqual(payload['generationConfig']['responseMimeType'], 'application/json')
         reply = self.rows('whatsapp_outbox')[0]['body']
         self.assertIn('R$ 4,00', reply); self.assertIn('cardápio', reply)
