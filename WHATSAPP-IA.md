@@ -31,6 +31,7 @@ que uma resposta foi gerada pelo Gemini. Consulte o resultado da última consult
    | `SAHARA_AI_API_KEY` | A chave privada do Gemini |
    | `SAHARA_AI_ENABLED` | `1` |
    | `SAHARA_AI_DAILY_LIMIT` | `50`, ou um limite menor |
+   | `SAHARA_AI_CUSTOMER_DAILY_LIMIT` | Opcional: `20` consultas por conversa/dia, limitado pela cota diária da loja |
 
 3. Salve e faça o deploy do **PDV**. A Evolution usa a conexão já existente.
 4. Abra **Integrações → WhatsApp da Sahara → Atualizar dados**. Configuração
@@ -59,8 +60,11 @@ Não é preciso contratar outro servidor para a IA.
 ## Limites e atendimento humano
 
 O limite local inicial é 50 consultas por dia no horário de Maringá, com teto
-configurável de 200. Cada número pode usar até 10 consultas em 24 horas, com
-intervalo mínimo de 30 segundos entre chamadas de IA. Tentativas que falham também
+configurável de 200. Cada número pode usar inicialmente até 20 consultas por dia,
+configuráveis por `SAHARA_AI_CUSTOMER_DAILY_LIMIT` sem ultrapassar o limite da loja.
+As duas cotas locais renovam à meia-noite no horário de Maringá. Perguntas seguidas
+continuam passando pela IA, sem cair no atendimento básico por um intervalo de
+30 segundos entre mensagens. Tentativas que falham também
 contam. As cotas gratuitas do Google podem ser inferiores ou mudar.
 
 `MENU`, `PARAR`, `ATIVAR AVISOS`, `ATENDENTE`, horários, formas de pagamento e

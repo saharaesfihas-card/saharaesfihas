@@ -31,6 +31,7 @@ class DeliveryAITests(unittest.TestCase):
             'SAHARA_EVOLUTION_URL': 'https://evolution.example', 'SAHARA_EVOLUTION_API_KEY': 'evolution-private-test',
             'SAHARA_EVOLUTION_INSTANCE': 'sahara', 'SAHARA_EVOLUTION_WEBHOOK_SECRET': 'webhook-private-test',
             'SAHARA_AI_ENABLED': '1', 'SAHARA_AI_API_KEY': 'gemini-private-test', 'SAHARA_AI_DAILY_LIMIT': '50',
+            'SAHARA_AI_CUSTOMER_DAILY_LIMIT': '20',
         })
         self.environment.start()
         self.connection = patch.object(evolution, 'connection', return_value='close')
@@ -194,25 +195,48 @@ class DeliveryAITests(unittest.TestCase):
         self.assertNotIn('gemini-private-test', json.dumps(self.rows('whatsapp_outbox')))
         self.assertEqual(len(self.rows('whatsapp_ai_usage')), 1)
 
-    def test_daily_limit_cooldown_and_per_customer_limit_use_basic_reply_without_charge(self):
+    def test_daily_store_limit_uses_basic_reply_without_another_charge(self):
         with patch.dict(os.environ, {'SAHARA_AI_DAILY_LIMIT': '1'}), patch.object(ai, 'interpret', return_value={'intent': 'menu', 'product_ids': []}) as model:
             self.inbound(); ai.process_one(self.app)
             self.inbound(phone='5511999999999'); ai.process_one(self.app)
             model.assert_called_once()
         self.assertEqual(self.rows('whatsapp_ai_jobs')[-1]['reason'], 'limit')
-        with patch.object(ai, 'interpret') as model:
-            self.inbound(); ai.process_one(self.app); model.assert_not_called()
+        self.assertEqual(len(self.rows('whatsapp_ai_usage')), 1)
+
+    def test_immediate_follow_up_question_uses_ai_instead_of_automatic_welcome(self):
+        with patch.object(ai, 'interpret', return_value={'intent': 'products', 'product_ids': ['carne']}) as model:
+            self.inbound('Quais esfihas salgadas você sugere?'); ai.process_one(self.app)
+            self.inbound('E quanto custa a de carne?'); ai.process_one(self.app)
+            self.assertEqual(model.call_count, 2)
+        self.assertTrue(all(row['status'] == 'done' for row in self.rows('whatsapp_ai_jobs')))
+        self.assertEqual(len(self.rows('whatsapp_ai_usage')), 2)
+        self.assertTrue(all('Carne — R$ 4,00' in row['body'] for row in self.rows('whatsapp_outbox')))
+
+    def test_customer_daily_limit_preserves_store_budget_and_other_customers(self):
+        with patch.dict(os.environ, {'SAHARA_AI_CUSTOMER_DAILY_LIMIT': '2'}), patch.object(ai, 'interpret', return_value={'intent': 'products', 'product_ids': ['carne']}) as model:
+            for _ in range(3):
+                self.inbound(); ai.process_one(self.app)
+            self.assertEqual(model.call_count, 2)
+            self.assertEqual(self.rows('whatsapp_ai_jobs')[-1]['reason'], 'customer_limit')
+            self.inbound(phone='5511999999999'); ai.process_one(self.app)
+            self.assertEqual(model.call_count, 3)
+        self.assertEqual(len(self.rows('whatsapp_ai_usage')), 3)
         with db(self.request) as conn:
-            for index in range(9):
-                key = uuid4().hex
-                conn.execute('INSERT INTO whatsapp_inbound VALUES(?,?,?,?)', (key, self.phone, 'teste', '2026-10-09'))
-                ai.enqueue(conn, key, self.phone, 'evolution')
-                conn.execute("UPDATE whatsapp_ai_jobs SET status='done' WHERE id=?", (key,))
-                conn.execute('INSERT INTO whatsapp_ai_usage VALUES(?,?,?,?)', (key, self.phone, ai.day(), int(time.time()) - 31))
-            conn.execute('UPDATE whatsapp_ai_usage SET timestamp=? WHERE phone=?', (int(time.time()) - 31, self.phone))
-        with patch.object(ai, 'interpret') as model:
-            self.inbound(); ai.process_one(self.app); model.assert_not_called()
-        self.assertEqual(len(self.rows('whatsapp_ai_usage')), 10)
+            self.assertEqual(ai.used_today(conn), 3)
+            self.assertNotIn(self.phone, json.dumps(ai.dashboard(conn)))
+
+    def test_midnight_resets_customer_quota_even_with_messages_in_last_24_hours(self):
+        with patch.dict(os.environ, {'SAHARA_AI_CUSTOMER_DAILY_LIMIT': '2'}), patch.object(ai, 'interpret', return_value={'intent': 'products', 'product_ids': ['carne']}) as model:
+            with patch.object(ai, 'day', return_value='2026-10-09'):
+                for _ in range(3):
+                    self.inbound(); ai.process_one(self.app)
+                self.assertEqual(self.rows('whatsapp_ai_jobs')[-1]['reason'], 'customer_limit')
+            with patch.object(ai, 'day', return_value='2026-10-10'):
+                self.inbound(); ai.process_one(self.app)
+                self.assertEqual(self.rows('whatsapp_ai_jobs')[-1]['status'], 'done')
+                with db(self.request) as conn:
+                    self.assertEqual(ai.used_today(conn), 1)
+            self.assertEqual(model.call_count, 3)
 
     def test_handoff_during_model_request_discards_the_late_response(self):
         self.inbound()
@@ -311,6 +335,7 @@ class DeliveryAITests(unittest.TestCase):
         state = response.json()['ai']
         self.assertTrue(state['configured']); self.assertIsNone(state['last_result'])
         self.assertEqual(state['daily_limit'], 50)
+        self.assertEqual(state['customer_daily_limit'], 20)
         self.assertNotIn('gemini-private-test', response.text)
         integrations = self.client.get('/api/integrations')
         self.assertTrue(next(item for item in integrations.json()['integrations'] if item['id'] == 'ai')['available'])
@@ -322,6 +347,9 @@ class DeliveryAITests(unittest.TestCase):
         for value, limit in [('99999', 200), ('0', 1), ('invalid', 50)]:
             with patch.dict(os.environ, {'SAHARA_AI_DAILY_LIMIT': value}):
                 self.assertEqual(ai.config()['limit'], limit)
+        for value, limit in [('99999', 50), ('0', 1), ('invalid', 20)]:
+            with patch.dict(os.environ, {'SAHARA_AI_CUSTOMER_DAILY_LIMIT': value}):
+                self.assertEqual(ai.config()['customer_limit'], limit)
 
     def test_structured_status_intent_cannot_choose_another_customer(self):
         self.inbound('Pode verificar para mim?')

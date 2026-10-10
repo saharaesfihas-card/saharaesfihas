@@ -31,7 +31,8 @@ DIAGNOSTICS = {
     'provider': 'O Gemini está indisponível. O atendimento básico foi utilizado. Toque em Verificar IA para conferir a chave e o modelo.',
     'disabled': 'A IA está desativada. Configure SAHARA_AI_ENABLED=1 no PDV para ativar.',
     'missing_key': 'Falta SAHARA_AI_API_KEY no serviço do PDV. Use a chave gerada pelo Google AI Studio.',
-    'limit': 'Limite local de IA atingido. O atendimento básico continua funcionando.',
+    'limit': 'Limite diário de IA da loja atingido. A cota local renova à meia-noite de Maringá; o atendimento básico continua funcionando.',
+    'customer_limit': 'Limite diário de IA desta conversa atingido. A cota local renova à meia-noite de Maringá; o atendimento básico continua funcionando.',
     'restart': 'O servidor reiniciou durante a consulta. O atendimento básico foi utilizado sem repetir a chamada.',
     'probe_limit': 'Limite de 3 testes de geração por dia atingido. O atendimento dos clientes continua disponível dentro da cota da loja.',
     'probe_wait': 'Aguarde 30 segundos antes de fazer outro teste de geração.',
@@ -189,7 +190,12 @@ def config():
         limit = max(1, min(int(os.environ.get('SAHARA_AI_DAILY_LIMIT', '50')), 200))
     except ValueError:
         limit = 50
-    return {'enabled': enabled, 'key': key, 'ready': enabled and bool(key), 'limit': limit}
+    try:
+        customer_limit = max(1, min(int(os.environ.get('SAHARA_AI_CUSTOMER_DAILY_LIMIT', '20')), limit))
+    except ValueError:
+        customer_limit = min(20, limit)
+    return {'enabled': enabled, 'key': key, 'ready': enabled and bool(key), 'limit': limit,
+            'customer_limit': customer_limit}
 
 
 def day():
@@ -291,7 +297,8 @@ def dashboard(conn):
     if last_result and last_result['status'] == 'fallback':
         last_result['message'] = DIAGNOSTICS.get(last_result['reason'], DIAGNOSTICS['provider'])
     return {'enabled': cfg['enabled'], 'configured': cfg['ready'], 'provider': 'gemini', 'model': cfg['model'], 'check': check,
-            'daily_limit': cfg['limit'], 'used_today': used, 'last_result': last_result,
+            'daily_limit': cfg['limit'], 'customer_daily_limit': cfg['customer_limit'],
+            'quota_day': day(), 'used_today': used, 'last_result': last_result,
             'missing': ['SAHARA_AI_API_KEY'] if not cfg['key'] else []}
 
 
@@ -377,9 +384,12 @@ def process_one(app):
             return True
         reason = 'restart' if job['status'] == 'recovering' else 'disabled' if not cfg['ready'] else ''
         used = used_today(conn)
-        recent = conn.execute('SELECT COUNT(*),MAX(timestamp) FROM whatsapp_ai_usage WHERE phone=? AND timestamp>?', (job['phone'], now - 86400)).fetchone()
-        if not reason and (used >= cfg['limit'] or recent[0] >= 10 or (recent[1] is not None and now - recent[1] < 30)):
+        customer_used = conn.execute('SELECT COUNT(*) FROM whatsapp_ai_usage WHERE phone=? AND day=?',
+                                     (job['phone'], day())).fetchone()[0]
+        if not reason and used >= cfg['limit']:
             reason = 'limit'
+        elif not reason and customer_used >= cfg['customer_limit']:
+            reason = 'customer_limit'
         if not reason:
             conn.execute('INSERT INTO whatsapp_ai_usage VALUES(?,?,?,?)', (job['id'], job['phone'], day(), now))
         conn.execute("UPDATE whatsapp_ai_jobs SET status='processing',updated_at=? WHERE id=?", (utcnow(), job['id']))

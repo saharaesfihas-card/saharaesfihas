@@ -866,9 +866,11 @@
       setup.append(el('p', 'A IA interpreta dúvidas e sugere opções do cardápio. Preços e informações dos pedidos vêm do PDV. Novos pedidos são finalizados no cardápio.', 'help'));
       if (ai.configured) {
         setup.append(el('p', `Consultas de IA hoje: ${numeric(ai.used_today)} de ${numeric(ai.daily_limit)}. A cota gratuita do Google pode ter limites adicionais.`, 'help'));
+        if (ai.customer_daily_limit) setup.append(el('p', `Limite por conversa: ${numeric(ai.customer_daily_limit)} consultas por dia. Os limites locais renovam à meia-noite de Maringá.`, 'help'));
         const last = ai.last_result;
         if (last?.status === 'done') setup.append(el('p', 'Última consulta de IA: concluída.', 'help'));
         if (last?.status === 'fallback') setup.append(el('p', last.message || (last.reason === 'limit' ? 'Limite de IA atingido. O atendimento básico continua funcionando.' : 'Na última consulta, o atendimento básico foi utilizado. Confira a chave e a disponibilidade da IA.'), 'help'));
+        if (last?.updated_at) setup.append(el('p', `Última consulta de atendimento: ${date(last.updated_at)}.`, 'help'));
       } else {
         const guide = el('details', undefined, 'whatsapp-setup whatsapp-ai-setup'); guide.append(el('summary', 'Ativar IA com a cota gratuita do Gemini'));
         const steps = el('ol');
