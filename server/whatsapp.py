@@ -289,8 +289,9 @@ def respond_to_inbound(conn, identifier, recipient, text, *, new_conversation=Fa
         if opening:
             queue(conn, welcome_event, recipient, 'welcome', conversational_welcome())
         queue(conn, 'menu-image:' + identifier, recipient, 'menu_image',
-              'Confira nosso cardápio! Para montar seu pedido aqui, envie PEDIR. '
-              'Cardápio online: ' + config()['menu'], after_event=welcome_event if opening else '')
+              'Confira nosso cardápio!\n\n🛒 Peça pelo site:\n' + config()['menu']
+              + '\n\nEscolha os produtos, informe a entrega e finalize seu pedido.',
+              after_event=welcome_event if opening else '')
         if requested_menu or re.fullmatch(r'(oi|ola|bom dia|boa tarde|boa noite)[\s!.,?]*', normalized):
             return
     if reply is whatsapp_ai.PENDING:

@@ -6,6 +6,8 @@ Por padrão, o primeiro contato recebe a saudação e, em seguida, o panfleto do
 cardápio como imagem. Uma conversa é considerada nova no primeiro contato ou
 depois de 24 horas sem mensagens do cliente. A imagem não é repetida a cada
 mensagem; **CARDÁPIO**, **MENU** ou **1** permitem solicitá-la novamente.
+A legenda da imagem destaca **Peça pelo site**, com o link direto do cardápio
+para escolher os produtos e finalizar o pedido online.
 
 A saudação precisa ter envio confirmado pelo provedor antes de liberar a imagem.
 Webhooks repetidos não criam novos envios. A pausa para a equipe e mensagens
