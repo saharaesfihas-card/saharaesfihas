@@ -206,7 +206,8 @@ class DeliveryAITests(unittest.TestCase):
         self.assertEqual(request.get_header('X-goog-api-key'), 'gemini-private-test')
         payload = json.loads(request.data)
         user = json.loads(payload['contents'][0]['parts'][0]['text'])
-        self.assertEqual(set(user), {'message', 'catalog', 'history', 'cart'})
+        self.assertEqual(set(user), {'message', 'catalog', 'history', 'cart', 'delivery_policy'})
+        self.assertIn('30 a 40 minutos', user['delivery_policy'])
         for secret in [self.phone, '44999999999', 'pessoa@example.com', 'Particular', 'gemini-private-test', 'evolution-private-test']:
             self.assertNotIn(secret, request.data.decode())
         self.assertEqual(payload['generationConfig']['maxOutputTokens'], 768)

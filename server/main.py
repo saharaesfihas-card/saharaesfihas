@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, model_validator
 
-from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders
+from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders, delivery_estimates
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
 
 class Model(BaseModel):
@@ -325,6 +325,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     app.include_router(operations.router)
     app.include_router(marketing.router)
     app.include_router(whatsapp.router)
+    app.include_router(delivery_estimates.router)
     app.include_router(ifood.router)
     app.include_router(ifood_orders.router)
 

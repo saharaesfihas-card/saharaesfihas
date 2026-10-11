@@ -848,6 +848,16 @@
     if (!current()) return;
     const byQR = data.provider === 'evolution';
     const setup = panel('WhatsApp da Sahara', 'Atendimento automático, carrinho na conversa, registro de pedidos no PDV e avisos de andamento. O cardápio também continua disponível.');
+    if (data.delivery) {
+      setup.append(el('h3', 'Prazos de entrega por distância'), el('p', data.delivery.policy, 'help'));
+      setup.append(el('p', `Saída: ${data.delivery.address}. ${data.delivery.origin ? 'Ponto da loja cadastrado. A estimativa usa o raio até a localização do cliente.' : 'Falta o pino exato da loja para calcular o raio. O atendente define o prazo enquanto isso.'}`, 'hint'));
+      const details = el('details', undefined, 'whatsapp-setup'); details.append(el('summary', 'Configurar o ponto da loja e a faixa de 5 a 6 km'));
+      const settings = createForm('Salvar prazos de entrega', form => saved('/admin/whatsapp/delivery', { address: get(form, 'delivery_address'), map_url: get(form, 'delivery_pin'), five_to_six: get(form, 'delivery_gap') }, 'Configuração de entrega salva.', 'PUT'));
+      field(settings.grid, 'delivery_address', 'Endereço de saída da loja', { value: data.delivery.address, required: true, wide: true, maxLength: 240 });
+      field(settings.grid, 'delivery_pin', 'Link do Google Maps com o pino da loja', { type: 'url', wide: true, maxLength: 2000, placeholder: 'Cole o link com a localização exata' });
+      field(settings.grid, 'delivery_gap', 'Prazo acima de 5 até 6 km', { type: 'select', value: data.delivery.five_to_six, choices: [['handoff', 'Atendente define'], ['50_60', '50 a 60 minutos'], ['70', '1 hora e 10 minutos']] });
+      details.append(settings.form); setup.append(details);
+    }
     if (data.configured) setup.append(el('p', 'Para comprar pelo WhatsApp, o cliente envia PEDIR, escolhe os itens e envia FINALIZAR. O robô coleta nome, entrega e pagamento, mostra o resumo e registra somente após CONFIRMAR PEDIDO. O pagamento permanece a conferir pela loja.', 'hint'));
     setup.append(el('p', data.configured ? 'Configuração presente no servidor. A confirmação de envio aparece no histórico abaixo.' : byQR ? 'Ativação pendente: configure o serviço Evolution API no Render para conectar pelo QR Code.' : 'Ativação pendente: conecte o número à API oficial da Meta e configure as credenciais no Render.'));
     if (!data.configured && byQR) {

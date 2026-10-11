@@ -189,7 +189,11 @@ esses marcadores por dados atuais. Não escreva valores monetários por conta pr
 Use menu para montar pedido; hours, payment, delivery e order_status para os demais assuntos da loja.
 Pedidos podem ser montados aqui com PEDIR ou no cardápio. O PDV registra somente após
 revisão e confirmação explícita local; a IA não registra pedidos nem confirma pagamentos.
-Use handoff para reclamações, alergias, ingredientes não confirmados, estoque, prazo exato,
+Use delivery para estimativas de prazo, distância e localização de entrega. O servidor calcula o raio
+com a localização real da loja e do cliente e aplica delivery_policy; não invente distâncias,
+não localize endereços por suposição nem prometa horário exato de chegada. Sem localização confiável,
+o atendente confere o endereço e estipula o prazo. Para atrasos de pedidos já feitos, use handoff.
+Use handoff para reclamações, alergias, ingredientes não confirmados, estoque, horário exato de chegada,
 alterações e cancelamentos. Não adivinhe informações da loja que não constem dos dados fornecidos.
 Não afirme que a loja está aberta agora: informe apenas os horários cadastrados.
 Não prometa descontos nem frete gratuito. O PDV consultará o status usando a identidade do cliente.
@@ -356,7 +360,8 @@ def interpret(text, products, cfg):
     body = {'systemInstruction': {'parts': [{'text': INSTRUCTIONS}]},
             'contents': [{'role': 'user', 'parts': [{'text': json.dumps(
                 {'message': scrub(text), 'catalog': products,
-                 'history': cfg.get('history', []), 'cart': cfg.get('cart', {'items': []})}, ensure_ascii=False)}]}],
+                 'history': cfg.get('history', []), 'cart': cfg.get('cart', {'items': []}),
+                 'delivery_policy': cfg.get('delivery_policy', '')}, ensure_ascii=False)}]}],
             'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 768,
                                  'responseMimeType': 'application/json', 'responseSchema': schema}}
     request = Request(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
@@ -400,7 +405,7 @@ def validate_reply(result):
     return reply
 
 
-def render(conn, recipient, result):
+def render(conn, recipient, result, question=''):
     from . import whatsapp
     intent = result['intent']
     reply = validate_reply(result)
@@ -422,8 +427,8 @@ def render(conn, recipient, result):
             items.append(f"• {product['name']} — R$ {price}")
         return 'Posso te sugerir estas opções do nosso cardápio:\n' + '\n'.join(items) + '\nQual delas você prefere? Escolha as quantidades e finalize aqui: ' + whatsapp.config()['menu']
     if intent == 'delivery':
-        return ('Atendemos somente por delivery. Para conferir a entrega e a taxa, informe seu endereço no cardápio: '
-                + whatsapp.config()['menu'] + '\nPara combinar detalhes com a loja, envie ATENDENTE.')
+        from . import delivery_estimates
+        return delivery_estimates.response(conn, recipient, question)
     if intent in ('unknown', 'conversation'):
         return ('Posso te ajudar com os sabores e preços do cardápio, entrega, horários ou seu pedido. '
                 'Me diga o que você precisa. Para falar com a equipe, envie ATENDENTE.')
@@ -440,6 +445,8 @@ def process_one(app):
         return False
     with db(request) as conn:
         cfg['model'] = selected_model(conn)
+        from . import delivery_estimates
+        cfg['delivery_policy'] = delivery_estimates.policy(conn)
         job = conn.execute("SELECT j.*,i.body AS question FROM whatsapp_ai_jobs j JOIN whatsapp_inbound i ON i.id=j.id WHERE j.status IN ('pending','recovering') ORDER BY j.created_at,j.id LIMIT 1").fetchone()
         if not job:
             return False
@@ -504,11 +511,13 @@ def process_one(app):
                     reply = whatsapp_checkout.apply_model(conn, job['phone'], result['cart_items'], cfg['cart_version'])
                     conn.execute('INSERT OR IGNORE INTO whatsapp_checkout_events VALUES(?)', (job['id'],))
                 else:
-                    reply = render(conn, job['phone'], result) if result else whatsapp.answer(conn, job['phone'], job['question'], conversational=True)
+                    reply = render(conn, job['phone'], result, job['question']) if result else whatsapp.answer(conn, job['phone'], job['question'], conversational=True)
             except (ValueError, TypeError, KeyError):
                 reply, reason = whatsapp.answer(conn, job['phone'], job['question'], conversational=True), 'provider'
             if reply:
-                kind = 'reply' if result and result['intent'] == 'handoff' else 'checkout_reply' if result and result['intent'] == 'cart' else 'ai_reply'
+                contact = whatsapp.contact_identity(conn, job['phone'])
+                handed_off = contact and contact['human_until'] > int(time.time())
+                kind = 'reply' if handed_off or result and result['intent'] == 'handoff' else 'checkout_reply' if result and result['intent'] == 'cart' else 'ai_reply'
                 whatsapp.queue(conn, 'reply:' + job['id'], job['phone'], kind, reply)
             status = 'fallback' if reason else 'done'
         conn.execute('UPDATE whatsapp_ai_jobs SET status=?,reason=?,updated_at=? WHERE id=?', (status, reason, utcnow(), job['id']))

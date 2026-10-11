@@ -203,6 +203,19 @@ def jid_phone(key):
     return canonical_phone(match.group(1)) if match else ''
 
 
+def location_message(message):
+    if not isinstance(message, dict):
+        return None
+    location = message.get('locationMessage')
+    if isinstance(location, dict):
+        return {'latitude': location.get('degreesLatitude'), 'longitude': location.get('degreesLongitude')}
+    for kind in ('ephemeralMessage', 'viewOnceMessage', 'viewOnceMessageV2'):
+        content = message.get(kind)
+        if isinstance(content, dict):
+            return location_message(content.get('message', {}))
+    return None
+
+
 def text_message(message):
     if not isinstance(message, dict):
         raise ValueError('Mensagem inválida.')

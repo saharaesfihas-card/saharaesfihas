@@ -337,6 +337,17 @@ async function run() {
     await view('reviews'); assert.match(await page.locator('#screen').innerText(), /Nenhuma avaliação/);
     await view('integrations'); assert.ok(await page.locator('.badge').filter({ hasText: 'Ativação pendente' }).count() >= 8); assert.equal(await page.locator('.badge').filter({ hasText: 'Disponível' }).count(), 0);
   });
+  await check('Delivery policy saves the store pin and the 5 to 6 km rule', async () => {
+    await view('integrations');
+    assert.match(await page.locator('#screen').innerText(), /Falta o pino exato/);
+    await page.getByText('Configurar o ponto da loja e a faixa de 5 a 6 km', { exact: true }).click();
+    await page.locator('#field-integrations-delivery_pin').fill('https://www.google.com/maps?q=-23.4656,-51.9108');
+    await page.locator('#field-integrations-delivery_gap').selectOption('70');
+    const saved = await submit('Salvar prazos de entrega', '/admin/whatsapp/delivery', 'PUT');
+    assert.deepEqual(saved.origin, { latitude: -23.4656, longitude: -51.9108 });
+    assert.equal(saved.five_to_six, '70');
+    assert.match(await page.locator('#screen').innerText(), /Ponto da loja cadastrado/);
+  });
   await check('Dashboard reflects real totals, cash closes and mobile does not overflow', async () => {
     await view('dashboard'); const dashboard = await api('/admin/dashboard'); assert.equal(dashboard.sales_cents, 720); assert.equal(dashboard.orders_count, 1); assert.equal(dashboard.conversion_rate, null);
     await view('cash'); const closeForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Fechar caixa', exact: true }) }); await closeForm.locator('[name="amount"]').fill('67.20'); await submit('Fechar caixa', '/admin/cash/sessions');

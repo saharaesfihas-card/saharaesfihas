@@ -21,7 +21,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .core import db, require_admin, utcnow, order_reference
-from . import evolution, whatsapp_ai, whatsapp_checkout
+from . import evolution, whatsapp_ai, whatsapp_checkout, delivery_estimates
 
 router = APIRouter()
 LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo',
@@ -166,6 +166,7 @@ def initialize(conn):
         conn.execute("ALTER TABLE whatsapp_outbox ADD COLUMN after_event TEXT NOT NULL DEFAULT ''")
     whatsapp_ai.initialize(conn)
     whatsapp_checkout.initialize(conn)
+    delivery_estimates.initialize(conn)
 
 
 def setting(conn, key, default=''):
@@ -207,7 +208,7 @@ def conversational_welcome():
             'O que você gostaria de pedir hoje? Para montar o carrinho aqui, envie PEDIR. Para falar com a equipe, envie ATENDENTE.')
 
 
-def answer(conn, recipient, text, allow_ai=False, conversational=False):
+def answer(conn, recipient, text, allow_ai=False, conversational=False, location=None):
     normalized = normalize(text)
     now = int(time.time())
     if normalized in ('parar', 'sair', 'stop', 'cancelar avisos'):
@@ -230,8 +231,14 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False):
     contact = contact_identity(conn, recipient)
     if normalized == 'menu':
         update_contact_identity(conn, recipient, 'human_until', 0)
+        delivery_estimates.reset_waiting(conn, recipient)
     elif contact and contact['human_until'] > now:
         return None
+    if location is not None:
+        return delivery_estimates.receive(conn, recipient, location)
+    delivery_reply = delivery_estimates.handle(conn, recipient, text)
+    if delivery_reply is not None:
+        return delivery_reply
     natural = allow_ai or conversational
     if natural and re.fullmatch(r'(oi|ola|bom dia|boa tarde|boa noite)[\s!.,?]*', normalized):
         return conversational_welcome()
@@ -277,9 +284,9 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False):
             '3 — Horários\n4 — Pagamentos\n5 — Falar com a equipe\nResponda com o número da opção. Para desativar avisos, envie PARAR.')
 
 
-def respond_to_inbound(conn, identifier, recipient, text, *, new_conversation=False):
+def respond_to_inbound(conn, identifier, recipient, text, *, new_conversation=False, location=None):
     before = whatsapp_checkout.load(conn, recipient)
-    reply = answer(conn, recipient, text, allow_ai=whatsapp_ai.config()['ready']) if text else answer(conn, recipient, 'atendente')
+    reply = answer(conn, recipient, text, allow_ai=whatsapp_ai.config()['ready'], location=location) if text or location is not None else answer(conn, recipient, 'atendente')
     contact = contact_identity(conn, recipient)
     normalized = normalize(text)
     automatic = (bool(text) and (reply is whatsapp_ai.PENDING or bool(reply))
@@ -366,6 +373,9 @@ async def receive(request: Request):
                         if timestamp <= 0 or timestamp > int(time.time()):
                             continue
                         text = message.get('text', {}).get('body', '') if message.get('type') == 'text' else ''
+                        location = delivery_estimates.point(message.get('location')) if message.get('type') == 'location' else None
+                        if location:
+                            text = f"Localização de entrega: https://www.google.com/maps?q={location['latitude']},{location['longitude']}"
                         if not isinstance(text, str):
                             raise ValueError
                         inserted = conn.execute('INSERT OR IGNORE INTO whatsapp_inbound VALUES(?,?,?,?)', (key, recipient, text[:4096] or '[Mensagem não textual]', utcnow())).rowcount
@@ -376,7 +386,7 @@ async def receive(request: Request):
                         # Eventos antigos são arquivados, sem reabrir a janela de atendimento.
                         if timestamp < int(time.time()) - 86400:
                             continue
-                        respond_to_inbound(conn, key, recipient, text, new_conversation=not previous or timestamp - previous['last_inbound'] >= 86400)
+                        respond_to_inbound(conn, key, recipient, text, new_conversation=not previous or timestamp - previous['last_inbound'] >= 86400, location=location)
             put_setting(conn, 'last_webhook_at', utcnow())
     except (ValueError, TypeError, AttributeError, KeyError):
         raise HTTPException(400, 'Evento inválido.') from None
@@ -449,6 +459,9 @@ async def evolution_webhook(request: Request):
                     if message.get('protocolMessage') or message.get('reactionMessage'):
                         continue
                     text = evolution.text_message(message)
+                    location = delivery_estimates.point(evolution.location_message(message))
+                    if location:
+                        text = f"Localização de entrega: https://www.google.com/maps?q={location['latitude']},{location['longitude']}"
                     if not isinstance(text, str):
                         raise ValueError
                     identifier = 'evolution:' + cfg['SAHARA_EVOLUTION_INSTANCE'] + ':' + identifier
@@ -458,7 +471,7 @@ async def evolution_webhook(request: Request):
                     conn.execute('INSERT INTO whatsapp_contacts(phone,last_inbound) VALUES(?,?) ON CONFLICT(phone) DO UPDATE SET last_inbound=MAX(last_inbound,excluded.last_inbound)', (recipient, timestamp))
                     if timestamp < int(time.time()) - 86400:
                         continue  # Não responde ao histórico antigo sincronizado ao parear.
-                    respond_to_inbound(conn, identifier, recipient, text, new_conversation=not previous or timestamp - previous['last_inbound'] >= 86400)
+                    respond_to_inbound(conn, identifier, recipient, text, new_conversation=not previous or timestamp - previous['last_inbound'] >= 86400, location=location)
             put_setting(conn, 'evolution_last_webhook_at', utcnow())
     except (ValueError, TypeError, AttributeError, KeyError, RecursionError):
         raise HTTPException(400, 'Evento inválido.') from None
@@ -675,6 +688,7 @@ def dashboard(request: Request):
     connection = evolution_status(request, cfg) if cfg['provider'] == 'evolution' else None
     with db(request) as conn:
         return {'provider': cfg['provider'], 'connection': connection, 'configured': cfg['ready'], 'enabled': cfg['enabled'], 'template_configured': bool(cfg['template']), 'ai': whatsapp_ai.dashboard(conn),
+                'delivery': delivery_estimates.config(conn) | {'policy': delivery_estimates.policy(conn)},
                 'webhook_path': '/api/whatsapp/evolution/webhook' if cfg['provider'] == 'evolution' else '/api/whatsapp/webhook',
                 'webhook_verified_at': setting(conn, 'webhook_verified_at') if cfg['provider'] == 'meta' else '',
                 'last_webhook_at': setting(conn, 'evolution_last_webhook_at' if cfg['provider'] == 'evolution' else 'last_webhook_at'),

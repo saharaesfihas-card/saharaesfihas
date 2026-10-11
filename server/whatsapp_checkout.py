@@ -95,10 +95,14 @@ def prompt(conn, cart):
         return summary(conn, cart) + '\nEnvie itens, por exemplo: 2 carne e 1 queijo. Para retirar: REMOVER carne. Para escolher quantidades: AJUSTAR 3 carne. Quando terminar, envie FINALIZAR. Para descartar, CANCELAR CARRINHO.'
     if cart['stage'] == 'review':
         data = cart['data']
-        return (summary(conn, cart) + f"\nNome: {data['name']}\nEntrega: {data['street']}, {data['number']} — {data['neighborhood']}, Maringá"
+        from . import delivery_estimates
+        delivery = (f"Localização enviada, número {data['number']}" if data.get('location')
+                    else f"{data['street']}, {data['number']} — {data['neighborhood']}, Maringá")
+        return (summary(conn, cart) + f"\nNome: {data['name']}\nEntrega: {delivery}"
                 + (f"\nComplemento: {data['complement']}" if data.get('complement') else '')
                 + (f"\nObservações: {data['notes']}" if data.get('notes') else '')
                 + f"\nPagamento: {data['payment_method']} (a conferir)."
+                + '\n' + delivery_estimates.label(conn, data.get('location'))
                 + '\nA loja confirma disponibilidade, atendimento do endereço, eventual taxa e prazo de entrega. Atendemos das 18h às 23h.'
                 + '\nRevise os dados. Para registrar no PDV, envie CONFIRMAR PEDIDO. Para mudar itens, ALTERAR CARRINHO; entrega, ALTERAR ENDEREÇO; pagamento, ALTERAR PAGAMENTO. Para descartar, CANCELAR CARRINHO.')
     return QUESTIONS[cart['stage']]
@@ -219,7 +223,7 @@ def confirm(conn, cart):
     try:
         body = OrderInput.model_validate({
             'items': data['items'], 'customer': {'name': data['name'], 'phone': cart['phone']},
-            'delivery': {key: data[key] for key in ('street', 'number', 'neighborhood', 'complement')},
+            'delivery': {key: data[key] for key in ('street', 'number', 'neighborhood', 'complement')} | {'location': data.get('location')},
             'payment_method': data['payment_method'], 'notes': data.get('notes', ''),
             'idempotency_key': 'whatsapp-cart:' + cart['id']})
         # Roll back stock/customer writes if the service rejects registration.
@@ -282,6 +286,10 @@ def handle(conn, recipient, text):
                     'alterar observacao': ('notes',)}[normalized]
             for key in keys:
                 cart['data'].pop(key, None)
+            if normalized == 'alterar endereco':
+                from . import delivery_estimates
+                cart['data'].pop('location', None)
+                delivery_estimates.save(conn, recipient)
             advance(conn, cart)
         cart['data'].pop('quote', None)
         save(conn, cart)
