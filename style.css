@@ -87,7 +87,7 @@ html{scroll-padding-top:var(--category-nav-offset)}
 @media(max-width:650px){#category-nav{margin:0 -8px 24px;padding:10px 10px 12px;border-radius:18px}.category-nav-heading{margin-bottom:6px;padding:0 4px}.category-nav-arrow{width:32px;height:32px}#category-nav .category-link{min-height:52px;padding:8px 13px 8px 9px;font-size:13px}.category-icon{width:30px;height:30px;border-radius:9px}}
 @media(prefers-reduced-motion:reduce){#category-nav *{transition:none}}
 
-/* Observações logo abaixo da apresentação do pedido. */
-.order-notes{max-width:620px;margin-top:22px}
-.order-notes label{display:block;margin-bottom:9px;font-size:14px;font-weight:600;color:var(--wine)}
+/* Observações logo depois dos itens da sacola. */
+.order-notes{margin-top:18px}
+.order-notes label{display:block;margin:0 0 9px;font-size:14px;font-weight:600;color:var(--wine)}
 .order-notes textarea{display:block;min-height:96px;border-radius:10px;background:white;font-size:16px}
