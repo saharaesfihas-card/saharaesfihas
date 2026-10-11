@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261011-pedidos-numerados-v1';
+const CACHE = 'sahara-pwa-20261011-abacaxi-canela-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'address.js', 'ordering.js', 'ordering.css', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
@@ -7,7 +7,7 @@ const ASSETS = [
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
   'images/atum.jpg', 'images/carne-seca.jpg', 'images/carne-seca-cream-cheese.jpg',
   'images/combo-20.jpg', 'images/combo-10.jpg', 'images/combo-15.jpg', 'images/combo-mix-10.jpg', 'images/combo-mix-15.jpg', 'images/combo-familia-20.jpg', 'images/combo-especial.jpg', 'images/coca-600.jpg', 'images/coca-1l.jpg', 'images/coca-2l.jpg', 'images/coca-350.jpg', 'images/coca-zero-350.jpg', 'images/guarana-350.jpg', 'images/agua-500.jpg', 'images/agua-com-gas.png', 'images/refri-2l.jpg',
-  'images/chocolate-profissional.jpg', 'images/doce-leite-profissional.jpg',
+  'images/abacaxi-canela.png', 'images/chocolate-profissional.jpg', 'images/doce-leite-profissional.jpg',
   'images/porquinho.jpg', 'images/bacon-queijo.jpg', 'images/bacon.jpg', 'images/brigadeiro.jpg',
   'images/brocolis-queijo.jpg', 'images/calabresa-catupiry.jpg', 'images/calabresa.jpg',
   'images/carne-queijo.png', 'images/carne.jpg', 'images/frango-bacon.jpg',
