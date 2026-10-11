@@ -15,6 +15,12 @@ specialItems.push(...[["atum","Atum","Atum desfiado, saboroso e assado na hora."
 groups.splice(groups.indexOf(savoryGroup),1,{title:'Esfihas tradicionais',price:savoryGroup.price,items:traditionalItems},{title:'Esfihas especiais',price:savoryGroup.price,items:specialItems});
 const categoryOrder=["Esfihas tradicionais","Esfihas especiais","Esfihas doces","Combos","Bebidas","Shawarma"];
 groups.sort((a,b)=>categoryOrder.indexOf(a.title)-categoryOrder.indexOf(b.title));
+for(const group of groups){
+  if(['Esfihas especiais','Esfihas doces'].includes(group.title)){
+    const price=item=>Number((item[3]||group.price).replace('R$','').trim().replace(',','.'));
+    group.items.sort((a,b)=>price(a)-price(b));
+  }
+}
 const catalog=groups.flatMap(g=>g.items.map(([id,name,description,price])=>({id,name,description,category:g.title,priceCents:Math.round(Number((price||g.price||(id==='shawarma-frango'?'R$ 19,99':'R$ 24,99')).replace('R$','').trim().replace(',','.'))*100)})));const cart=new Map();
 const money=cents=>(cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 try{const saved=JSON.parse(localStorage.getItem('sahara-cart')||'[]');for(const [id,q] of saved){if(catalog.some(p=>p.id===id)&&Number.isInteger(q)&&q>0&&q<=99)cart.set(id,q);}}catch{}
