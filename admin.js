@@ -372,7 +372,8 @@
       }
       if (order.notes) card.append(el('p', `Observação: ${order.notes}`, 'order-notes'));
       if (order.discount_cents) card.append(el('p', `${fromIFood ? 'Benefícios do iFood' : 'Desconto'}: ${money(order.discount_cents)}`, 'order-meta'));
-      const total = el('p', undefined, 'order-total'); total.append(el('span', 'Total do pedido'), el('strong', money(order.total_cents))); card.append(total);
+      if (address.fee) card.append(el('p', address.fee.status === 'pending' ? 'Taxa de entrega pendente: defina o valor antes do pagamento.' : `Taxa de entrega: ${address.fee.amount_cents === 0 ? 'grátis' : money(address.fee.amount_cents)}`, 'order-meta'));
+      const total = el('p', undefined, 'order-total'); total.append(el('span', address.fee?.status === 'pending' ? 'Total provisório, sem entrega' : 'Total do pedido'), el('strong', money(order.total_cents))); card.append(total);
       card.append(el('p', `${order.payment_method || 'Pagamento'} · ${paymentLabel(order)}`, 'order-meta'));
       const actions = el('div', undefined, 'order-actions');
       const nextStatuses = fromIFood ? [] : transitions[order.status] || [];
@@ -383,7 +384,7 @@
           await saved(`/admin/orders/${encodeURIComponent(order.id)}`, { status: statusSelect.value }, 'Situação do pedido atualizada.', 'PATCH');
         }, 'small-button status-action'));
       }
-      if (!fromIFood && order.payment_status !== 'paid' && order.status !== 'cancelled') actions.append(button('Registrar pagamento', async () => {
+      if (!fromIFood && order.payment_status !== 'paid' && order.status !== 'cancelled' && address.fee?.status !== 'pending') actions.append(button('Registrar pagamento', async () => {
         if (!window.confirm(`Confirmar que o pagamento de ${money(order.total_cents)} do pedido #${orderNumber(order)} foi recebido?`)) return;
         await saved(`/admin/orders/${encodeURIComponent(order.id)}/payment`, { status: 'paid' }, 'Pagamento recebido e registrado.');
       }));
@@ -396,6 +397,12 @@
         showNotice(result.dispatch?.message || (drivers.value ? 'Entregador atribuído.' : 'Entregador removido.'), ['invalid_phone', 'missing_address', 'not_configured', 'uncertain', 'failed', 'blocked', 'skipped'].includes(status));
         await renderView();
       }));
+      if (address.fee?.status === 'pending' && order.status !== 'cancelled') {
+        const details = el('details'); details.append(el('summary', 'Definir taxa de entrega'));
+        const feeForm = createForm('Salvar taxa', values => saved(`/admin/orders/${encodeURIComponent(order.id)}/delivery-fee`, { amount_cents: cents(get(values, 'fee')) }, 'Taxa e total do pedido atualizados. Confirme o valor com o cliente.', 'PUT'));
+        field(feeForm.grid, 'fee', 'Taxa de entrega (R$)', { type: 'number', min: 0, max: 1000, step: 0.01, required: true });
+        details.append(feeForm.form); card.append(details);
+      }
       card.append(actions); cards.append(card);
       searchable.push([card, normalize([order.id, order.display_number, `#${orderNumber(order)}`, ifood.order_id, ifood.display_id, order.customer_name, order.customer_phone].join(' '))]);
     }
@@ -424,6 +431,7 @@
     if (address.location && Number.isFinite(address.location.latitude) && Number.isFinite(address.location.longitude)) target.append(el('p', `Localização: https://www.google.com/maps?q=${address.location.latitude},${address.location.longitude}`));
     for (const item of order.items || []) { const line = el('p', undefined, 'receipt-line'); line.append(el('span', `${item.quantity} × ${item.name}`), el('span', money(itemTotal(item)))); target.append(line); appendOptions(target, item); }
     if (ifood) target.append(el('p', `Entrega: ${money(ifood.delivery_fee_cents)} · Taxas adicionais: ${money(ifood.additional_fees_cents)}`), el('p', `Pago ao iFood: ${money(ifood.prepaid_cents)} · Pendente: ${money(ifood.pending_cents)}`));
+    if (order.delivery?.fee) target.append(el('p', order.delivery.fee.status === 'pending' ? 'Taxa de entrega pendente — total provisório, sem entrega.' : `Taxa de entrega: ${money(order.delivery.fee.amount_cents)}`));
     if (order.notes) target.append(el('p', `Observação: ${order.notes}`));
     if (order.discount_cents) target.append(el('p', `Desconto: ${money(order.discount_cents)}`));
     target.append(el('hr'), el('strong', `TOTAL ${money(order.total_cents)}`), el('p', `${order.payment_method} · ${paymentLabel(order)}`));
@@ -852,10 +860,12 @@
       setup.append(el('h3', 'Prazos de entrega por distância'), el('p', data.delivery.policy, 'help'));
       setup.append(el('p', `Saída: ${data.delivery.address}. ${data.delivery.origin ? 'Ponto da loja cadastrado. A estimativa usa o raio até a localização do cliente.' : 'Falta o pino exato da loja para calcular o raio. O atendente define o prazo enquanto isso.'}`, 'hint'));
       const details = el('details', undefined, 'whatsapp-setup'); details.append(el('summary', 'Configurar o ponto da loja e a faixa de 5 a 6 km'));
-      const settings = createForm('Salvar prazos de entrega', form => saved('/admin/whatsapp/delivery', { address: get(form, 'delivery_address'), map_url: get(form, 'delivery_pin'), five_to_six: get(form, 'delivery_gap') }, 'Configuração de entrega salva.', 'PUT'));
+      const settings = createForm('Salvar prazos de entrega', form => saved('/admin/whatsapp/delivery', { address: get(form, 'delivery_address'), map_url: get(form, 'delivery_pin'), five_to_six: get(form, 'delivery_gap'), fees_enabled: form.has('delivery_fees'), above_seven: get(form, 'delivery_above_seven') }, 'Configuração de entrega salva.', 'PUT'));
       field(settings.grid, 'delivery_address', 'Endereço de saída da loja', { value: data.delivery.address, required: true, wide: true, maxLength: 240 });
       field(settings.grid, 'delivery_pin', 'Link do Google Maps com o pino da loja', { type: 'url', wide: true, maxLength: 2000, placeholder: 'Cole o link com a localização exata' });
       field(settings.grid, 'delivery_gap', 'Prazo acima de 5 até 6 km', { type: 'select', value: data.delivery.five_to_six, choices: [['handoff', 'Atendente define'], ['50_60', '50 a 60 minutos'], ['70', '1 hora e 10 minutos']] });
+      field(settings.grid, 'delivery_fees', 'Aplicar as taxas por raio aos novos pedidos', { type: 'checkbox', checked: data.delivery.fees_enabled });
+      field(settings.grid, 'delivery_above_seven', 'Taxa acima de 7 km', { type: 'select', value: data.delivery.above_seven || 'consult', choices: [['consult', 'Atendente confirma'], ['10', 'R$ 10,00']] });
       details.append(settings.form); setup.append(details);
     }
     if (data.configured) setup.append(el('p', 'Para comprar pelo WhatsApp, o cliente envia PEDIR, escolhe os itens e envia FINALIZAR. O robô coleta nome, entrega e pagamento, mostra o resumo e registra somente após CONFIRMAR PEDIDO. O pagamento permanece a conferir pela loja.', 'hint'));

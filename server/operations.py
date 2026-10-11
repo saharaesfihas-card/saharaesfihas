@@ -516,6 +516,9 @@ def create_receivable(payload: ReceivableInput, request: Request):
                 raise HTTPException(409, "Este pedido já está pago.")
             if order["status"] in ("cancelled", "canceled"):
                 raise HTTPException(409, "Pedido cancelado não pode gerar fiado.")
+            from .delivery_estimates import pending_fee
+            if pending_fee(order):
+                raise HTTPException(409, "Defina a taxa de entrega antes de registrar o fiado.")
             if payload.amount_cents != order["total_cents"]:
                 raise HTTPException(422, "O fiado vinculado deve corresponder ao total do pedido.")
             if conn.execute("SELECT 1 FROM receivables WHERE order_id=?", (payload.order_id,)).fetchone():

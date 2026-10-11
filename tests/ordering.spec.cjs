@@ -223,6 +223,35 @@ async function run() {
     assert.equal(await page.locator('#help-dialog').evaluate(dialog => dialog.open), false);
   });
 
+  await test('Confirmed location shows the delivery fee, removal clears it and server total reaches WhatsApp', async page => {
+    await address(page);
+    await page.route(`${baseURL}/api/delivery/quote`, route => route.fulfill({ status: 200, json: {
+      policy: 'Até 3 km grátis; até 6 km R$ 8,00.',
+      fee: route.request().postDataJSON().location ? { status: 'quoted', amount_cents: 800 } : { status: 'pending', amount_cents: null }
+    } }));
+    await page.context().grantPermissions(['geolocation']);
+    await page.context().setGeolocation({ latitude: -23.43, longitude: -51.91, accuracy: 10 });
+    await page.locator('#use-location').click();
+    await page.locator('#confirm-location').click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="Taxa de entrega"]').textContent.includes('Total com entrega'));
+    assert.match(await page.locator('[aria-label="Taxa de entrega"]').innerText(), /Total com entrega: R\$\s*12,00/);
+    await page.locator('#remove-location').click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="Taxa de entrega"]').textContent.includes('Taxa a confirmar'));
+    assert.match(await page.locator('[aria-label="Taxa de entrega"]').innerText(), /Produtos, sem a taxa de entrega: R\$\s*4,00/);
+    await page.locator('#use-location').click();
+    await page.locator('#confirm-location').click();
+    await page.route(`${baseURL}/api/orders`, route => route.fulfill({ status: 201, json: { ...success,
+      subtotal_cents: 400, total_cents: 1200, delivery_fee: { status: 'quoted', amount_cents: 800 }
+    } }));
+    await page.locator('#checkout').click();
+    await page.waitForFunction(() => window.__navigated.length > 0);
+    const message = await whatsappMessage(page);
+    assert.match(message, /Valor dos produtos registrado: R\$\s*4,00/);
+    assert.match(message, /Taxa de entrega: R\$\s*8,00/);
+    assert.match(message, /Total do pedido: R\$\s*12,00/);
+    assert.doesNotMatch(message, /grátis na região/);
+  }, { apiBase: '/api' });
+
   await test('API checkout registers one order while duplicate clicks are pending', async page => {
     await address(page);
     const requests = [];

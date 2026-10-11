@@ -73,14 +73,15 @@ function checkoutMessage(prepared, registeredOrder = null) {
     ...(location ? [`Localização de entrega: ${location.url}`,
       ...(location.accuracy !== null ? [`Precisão aproximada da localização: ${Math.max(1, Math.round(location.accuracy))} m.`] : [])] : []),
     ...(address.complement ? [`Complemento: ${address.complement}`] : []),
-    'Taxa de entrega: grátis na região de Maringá.',
+    registeredOrder?.delivery_fee?.status === 'quoted' ? `Taxa de entrega: ${registeredOrder.delivery_fee.amount_cents === 0 ? 'grátis' : money(registeredOrder.delivery_fee.amount_cents)}.` : 'Taxa de entrega: confirmar com o atendente antes do pagamento.',
   ] : ['', 'Retirada na loja'];
   return [
     'Olá, Sahara! Gostaria de consultar este pedido:',
     ...(registeredOrder ? [`Solicitação registrada: #${registeredOrder.display_number || registeredOrder.id}`] : []), '',
     ...prepared.rows.map(row => `${row.quantity}x ${row.name} — ${money(row.quantity * row.priceCents)}`), '',
-    `${registeredOrder ? 'Valor dos produtos registrado' : 'Subtotal dos produtos'}: ${money(registeredOrder ? registeredOrder.total_cents : prepared.totalCents)}`,
+    `${registeredOrder ? 'Valor dos produtos registrado' : 'Subtotal dos produtos'}: ${money(registeredOrder ? (registeredOrder.subtotal_cents ?? registeredOrder.total_cents) : prepared.totalCents)}`,
     ...addressLines,
+    ...(registeredOrder ? [`${registeredOrder.delivery_fee?.status === 'pending' ? 'Total provisório, sem a taxa de entrega' : 'Total do pedido'}: ${money(registeredOrder.total_cents)}`] : []),
     ...(prepared.customer.name ? ['', `Nome: ${prepared.customer.name}`] : []),
     ...(prepared.customer.phone ? [`Telefone: ${prepared.customer.phone}`] : []),
     ...(prepared.paymentMethod ? ['', `Forma de pagamento: ${prepared.paymentMethod}`] : []),

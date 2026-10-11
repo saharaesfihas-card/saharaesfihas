@@ -46,16 +46,24 @@ def receipt(order, driver, received):
     if order['discount_cents']:
         lines.append(f"Desconto: {money(order['discount_cents'])}")
     total = order['total_cents']
-    lines.extend([f'Total dos produtos: {money(total)}',
+    fee = address.get('fee')
+    pending = fee and fee['status'] == 'pending'
+    if fee:
+        lines.append('Taxa de entrega: a loja confirma antes de cobrar.' if pending else f"Taxa de entrega: {money(fee['amount_cents'])}")
+    total_label = 'Total provisório dos produtos, sem entrega' if pending else 'Total do pedido' if fee else 'Total dos produtos'
+    lines.extend([f'{total_label}: {money(total)}',
                   f"Pagamento: {order['payment_method'] or 'A combinar com a loja'}"])
     if order['payment_status'] == 'paid':
-        lines.append('PAGO — não cobrar os produtos novamente.')
+        lines.append('PAGO — não cobrar novamente.' if fee else 'PAGO — não cobrar os produtos novamente.')
+    elif pending:
+        lines.append('VALOR A COBRAR PENDENTE — confirme a taxa com a loja antes de receber.')
     elif received:
         lines.extend([f'Já recebido: {money(received)}',
-                      f'Valor restante dos produtos: {money(max(0, total - received))}'])
+                      f"{'Valor restante do pedido' if fee else 'Valor restante dos produtos'}: {money(max(0, total - received))}"])
     else:
-        lines.append(f'A RECEBER pelos produtos: {money(total)}')
-    lines.append('Taxa de entrega: confirmar com a loja.')
+        lines.append(f"{'A RECEBER pelo pedido' if fee else 'A RECEBER pelos produtos'}: {money(total)}")
+    if not fee:
+        lines.append('Taxa de entrega: confirmar com a loja.')
     return '\n'.join(lines)
 
 

@@ -147,7 +147,7 @@
         trackingLink.href = tracking;
         trackingLink.hidden = false;
       }
-      announce(`Solicitação #${order.display_number || order.id} registrada. Valor dos produtos: ${checkout.money(order.total_cents)}. Revise a mensagem no WhatsApp; a loja precisa confirmar disponibilidade, entrega e pagamento.`);
+      announce(`Solicitação #${order.display_number || order.id} registrada. ${order.delivery_fee?.status === 'pending' ? 'Total provisório dos produtos, taxa a confirmar' : 'Total do pedido'}: ${checkout.money(order.total_cents)}. Revise a mensagem no WhatsApp; a loja precisa confirmar disponibilidade, entrega e pagamento.`);
       if (popup) {
         try { popup.location.replace(url); } catch { try { popup.close(); } catch {} }
       }
@@ -178,7 +178,7 @@
       return 'Você pode indicar Pix, dinheiro, cartão de crédito ou cartão de débito. Para Pix, combine os dados com a loja pelo WhatsApp. O cardápio não cobra seu cartão nem confirma pagamento online.';
     }
     if (/entrega|endereco|localizacao|delivery|frete|taxa/.test(input)) {
-      return 'Atendemos somente por delivery em Maringá. Consulte a taxa de entrega para seu endereço. Digite rua, número e bairro ou use sua localização, confira o ponto no mapa e confirme. Informe sempre o número da casa. A loja confirma se atende o endereço, a taxa e o prazo.';
+      return `Atendemos somente por delivery em Maringá. ${window.saharaDeliveryFees?.policy() || 'Consulte a taxa de entrega para seu endereço.'} Digite rua, número e bairro ou use sua localização, confira o ponto no mapa e confirme. Informe sempre o número da casa. A loja confirma se atende o endereço, a taxa e o prazo.`;
     }
     if (/pedido|pedir|sacola|agendar|agendamento|order/.test(input)) {
       return 'Toque em + para escolher os produtos e revise a sacola. Informe o endereço ou confirme sua localização, escolha como deseja pagar e toque em Continuar no WhatsApp. Revise e envie a mensagem; a loja confirma a solicitação. Você não precisa criar uma conta.';

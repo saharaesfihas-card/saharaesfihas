@@ -61,6 +61,7 @@
       document.querySelector(`#${id}`).required = delivery && !selected;
       document.querySelector(`label[for="${id}"] .field-required`).textContent = selected ? '(opcional)' : '(obrigatório)';
     }
+    document.dispatchEvent(new Event('sahara:location-changed'));
   }
 
   button.addEventListener('click', () => {
@@ -129,6 +130,9 @@
     button.focus({ preventScroll: true });
   });
 
+  for (const id of ['street', 'neighborhood']) document.querySelector(`#${id}`).addEventListener('input', () => {
+    if (fields.confirmed.value) { fields.confirmed.value = ''; refresh(); }
+  });
   form.addEventListener('change', refresh);
   document.addEventListener('sahara:delivery-restored', () => {
     refresh();

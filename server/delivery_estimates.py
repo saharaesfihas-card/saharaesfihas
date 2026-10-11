@@ -68,7 +68,9 @@ def config(conn):
     if not isinstance(data, dict):
         data = {}
     return {'address': data.get('address', ADDRESS), 'origin': point(data.get('origin')),
-            'five_to_six': data.get('five_to_six') if data.get('five_to_six') in ('50_60', '70') else 'handoff'}
+            'five_to_six': data.get('five_to_six') if data.get('five_to_six') in ('50_60', '70') else 'handoff',
+            'fees_enabled': data.get('fees_enabled') is True,
+            'above_seven': '10' if data.get('above_seven') == '10' else 'consult'}
 
 
 def minutes(distance, gap='handoff'):
@@ -93,18 +95,59 @@ def radius(origin, destination):
     return round(6371.0088 * 2 * math.asin(math.sqrt(min(1, max(0, a)))), 6)
 
 
+def fee_cents(distance, above_seven='consult'):
+    if not math.isfinite(distance) or distance < 0:
+        return None
+    for limit, cents in ((3, 0), (4, 400), (5, 500), (6, 800), (7, 1000)):
+        if distance <= limit:
+            return cents
+    return 1000 if above_seven == '10' else None
+
+
+def fee_policy(conn):
+    cfg = config(conn)
+    if not cfg['fees_enabled']:
+        return 'Taxa de entrega: consultar com a loja.'
+    return ('Taxas por raio da loja: até 3 km, grátis; acima de 3 até 4 km, R$ 4,00; '
+            'acima de 4 até 5 km, R$ 5,00; acima de 5 até 6 km, R$ 8,00; '
+            'acima de 6 até 7 km, R$ 10,00; acima de 7 km, '
+            + ('R$ 10,00.' if cfg['above_seven'] == '10' else 'consultar com o atendente.')
+            + ' Sem localização confiável, o atendente confirma a taxa.')
+
+
+def fee_quote(conn, location):
+    cfg = config(conn)
+    if not cfg['fees_enabled']:
+        return None
+    destination = point(location)
+    amount = fee_cents(radius(cfg['origin'], destination), cfg['above_seven']) if cfg['origin'] and destination else None
+    return {'status': 'quoted' if amount is not None else 'pending', 'amount_cents': amount}
+
+
+def fee_text(quote):
+    if not quote or quote['status'] == 'pending':
+        return 'Taxa de entrega: o atendente confirma o valor antes do pagamento.'
+    from .whatsapp_checkout import money
+    return 'Taxa de entrega: ' + ('grátis.' if quote['amount_cents'] == 0 else money(quote['amount_cents']) + '.')
+
+
+def pending_fee(order):
+    return json.loads(order['delivery_json']).get('fee', {}).get('status') == 'pending'
+
+
 def policy(conn):
     cfg = config(conn)
     gap = minutes(6, cfg['five_to_six']) or 'atendente define'
     return ('Prazos estimados por raio da loja: até 3 km, 30 a 40 minutos; acima de 3 até 4 km, '
             '40 a 50 minutos; acima de 4 até 5 km, 50 a 60 minutos; acima de 5 até 6 km, '
-            + gap + '; acima de 6 km, 1 hora e 10 minutos. Sem localização confiável, o atendente define o prazo.')
+            + gap + '; acima de 6 km, 1 hora e 10 minutos. Sem localização confiável, o atendente define o prazo.'
+            + '\n' + fee_policy(conn))
 
 
 def label(conn, location):
     cfg, destination = config(conn), point(location)
     estimate = minutes(radius(cfg['origin'], destination), cfg['five_to_six']) if cfg['origin'] and destination else None
-    return 'Prazo estimado de entrega: ' + estimate + '.' if estimate else 'Prazo de entrega: o atendente confere a localização e define o prazo.'
+    return ('Prazo estimado de entrega: ' + estimate + '.' if estimate else 'Prazo de entrega: o atendente confere a localização e define o prazo.')
 
 
 def state(conn, recipient):
@@ -139,10 +182,16 @@ def handoff(conn, recipient):
             'O atendimento automático está pausado. Para retomar, envie MENU.')
 
 
+def fee_request(text):
+    return bool(re.search(r'\b(taxa|frete|custo da entrega|valor da entrega)\b', text)
+                or re.search(r'\bgratis\b', text) and re.search(r'\bentrega\b', text))
+
+
 def response(conn, recipient, text='', location=None):
     from . import whatsapp, whatsapp_checkout
     cfg = config(conn)
     normalized = whatsapp.normalize(text)
+    fee_intent = fee_request(normalized)
     address = re.search(r'\b(rua|avenida|av\.?|travessa|bairro|cep)\b', normalized)
     requested = re.search(r'\b(prazo|demora|tempo|previsao|quando chega)\b', normalized)
     if re.search(r'\b(atrasad[oa]|atraso|ja pedi|ja fiz|quanto falta|cade meu pedido)\b', normalized):
@@ -151,6 +200,9 @@ def response(conn, recipient, text='', location=None):
     previous = state(conn, recipient)
     cart = whatsapp_checkout.load(conn, recipient)
     if not destination and address:
+        if fee_intent:
+            save(conn, recipient, awaiting=True)
+            return fee_policy(conn) + '\nEnvie a localização de entrega para confirmar o valor. Se não conseguir, envie ATENDENTE.'
         return handoff(conn, recipient)
     if not destination and previous and previous['point_json']:
         destination = point(json.loads(previous['point_json']))
@@ -177,8 +229,14 @@ def response(conn, recipient, text='', location=None):
         if len(distances) == 1 and not re.search(r'\b(entre|ate|acima)\b|\d+\s*(?:a|-)\s*\d+\s*km', normalized):
             distance = float(distances[0].replace(',', '.'))
             estimate = minutes(distance, cfg['five_to_six'])
+            if fee_intent and cfg['fees_enabled']:
+                amount = fee_cents(distance, cfg['above_seven'])
+                return ('Para o raio informado, ' + fee_text({'status': 'quoted', 'amount_cents': amount} if amount is not None else None)
+                        + ' O valor depende da localização de entrega confirmada.')
             return ('Para um raio informado de ' + distances[0] + ' km, o prazo estimado é de ' + estimate
-                    + '. A taxa de entrega é consultada com a loja.') if estimate else handoff(conn, recipient)
+                    + '. ' + (fee_text({'status': 'quoted', 'amount_cents': fee_cents(distance, cfg['above_seven'])})
+                    if cfg['fees_enabled'] and fee_cents(distance, cfg['above_seven']) is not None else fee_text(None))
+                    + ' O valor depende da localização confirmada.') if estimate else handoff(conn, recipient)
         if previous and previous['awaiting'] and not requested:
             return handoff(conn, recipient)
         save(conn, recipient, awaiting=True)
@@ -188,6 +246,8 @@ def response(conn, recipient, text='', location=None):
     distance = radius(cfg['origin'], destination)
     estimate = minutes(distance, cfg['five_to_six'])
     if not estimate:
+        if cfg['fees_enabled']:
+            return fee_text(fee_quote(conn, destination)) + '\n' + handoff(conn, recipient)
         return handoff(conn, recipient)
     save(conn, recipient, destination)
     prefix = ''
@@ -195,7 +255,7 @@ def response(conn, recipient, text='', location=None):
         from .core import order_reference
         prefix = f"Para o endereço do pedido #{order_reference(order)}, "
     distance_text = f'{distance:.1f}'.replace('.', ',')
-    return prefix + ('o' if prefix else 'O') + f" raio aproximado é de {distance_text} km e o prazo estimado de entrega é de {estimate}. Taxa de entrega: consultar com a loja."
+    return prefix + ('o' if prefix else 'O') + f" raio aproximado é de {distance_text} km e o prazo estimado de entrega é de {estimate}. " + fee_text(fee_quote(conn, destination))
 
 
 def handle(conn, recipient, text):
@@ -211,7 +271,8 @@ def handle(conn, recipient, text):
     intent = re.search(r'\bcade meu pedido\b', normalized) or timing and (business or short_question)
     if location:
         return receive(conn, recipient, location)
-    if intent or (waiting and waiting['awaiting'] and (address or 'maps' in normalized)):
+    fee_intent = fee_request(normalized)
+    if intent or fee_intent or (waiting and waiting['awaiting'] and (address or 'maps' in normalized)):
         return response(conn, recipient, text, location)
     return None
 
@@ -245,6 +306,8 @@ class DeliverySettings(BaseModel):
     map_url: str = Field(default='', max_length=2000)
     origin: dict | None = None
     five_to_six: Literal['50_60', '70', 'handoff'] = 'handoff'
+    fees_enabled: bool | None = None
+    above_seven: Literal['consult', '10'] | None = None
 
 
 @router.put('/api/admin/whatsapp/delivery', dependencies=[Depends(require_admin)])
@@ -255,6 +318,43 @@ def configure(body: DeliverySettings, request: Request):
         origin = map_point(body.map_url) if body.map_url else point(body.origin) if body.origin is not None else old['origin']
         if (body.map_url or body.origin is not None) and not origin:
             raise HTTPException(422, 'Use um link do Google Maps com o pino em coordenadas. O centro da tela do mapa não identifica o endereço.')
-        value = {'address': body.address, 'origin': origin, 'five_to_six': body.five_to_six}
+        value = {'address': body.address if 'address' in body.model_fields_set else old['address'], 'origin': origin,
+                 'five_to_six': body.five_to_six if 'five_to_six' in body.model_fields_set else old['five_to_six'],
+                 'fees_enabled': old['fees_enabled'] if body.fees_enabled is None else body.fees_enabled,
+                 'above_seven': body.above_seven or old['above_seven']}
         whatsapp.put_setting(conn, 'delivery_estimates', json.dumps(value))
         return value | {'policy': policy(conn)}
+
+
+class QuoteInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    location: dict | None = None
+
+
+@router.post('/api/delivery/quote')
+def quote_endpoint(body: QuoteInput, request: Request):
+    with db(request) as conn:
+        return {'fee': fee_quote(conn, body.location), 'policy': fee_policy(conn),
+                'estimate': label(conn, body.location)}
+
+
+class FeeInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    amount_cents: int = Field(strict=True, ge=0, le=100000)
+
+
+@router.put('/api/admin/orders/{order_id}/delivery-fee', dependencies=[Depends(require_admin)])
+def resolve_fee(order_id: str, body: FeeInput, request: Request):
+    from .core import order_dict
+    with db(request) as conn:
+        order = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
+        if not order:
+            raise HTTPException(404, 'Pedido não encontrado.')
+        delivery = json.loads(order['delivery_json'])
+        if (order['source'] == 'ifood' or order['payment_status'] == 'paid' or order['status'] in ('cancelled', 'canceled')
+                or 'fee' not in delivery or conn.execute('SELECT 1 FROM receivables WHERE order_id=?', (order_id,)).fetchone()):
+            raise HTTPException(409, 'Não é possível alterar a taxa deste pedido.')
+        delivery['fee'] = {'status': 'quoted', 'amount_cents': body.amount_cents, 'confirmed_by': 'staff'}
+        conn.execute('UPDATE orders SET delivery_json=?,total_cents=? WHERE id=?',
+                     (json.dumps(delivery, ensure_ascii=False), order['subtotal_cents'] - order['discount_cents'] + body.amount_cents, order_id))
+        return {'order': order_dict(conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone())}

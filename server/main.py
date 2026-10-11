@@ -298,6 +298,8 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
                 raise HTTPException(409, 'Não é possível registrar pagamento para esse pedido.')
             if order['source'] == 'ifood':
                 raise HTTPException(409, 'O pagamento deste pedido de teste pertence ao iFood e não pode gerar recebimento no caixa local.')
+            if delivery_estimates.pending_fee(order):
+                raise HTTPException(409, 'Defina a taxa de entrega antes de registrar o pagamento.')
             conn.execute('UPDATE orders SET payment_status=\'paid\' WHERE id=?', (order_id,))
             fresh = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
             operations.record_sale(conn, fresh)
@@ -336,7 +338,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     @app.get('/{asset:path}')
     def static_asset(asset: str):
         asset = asset or 'index.html'
-        public = {'index.html', 'app.js', 'address.js', 'ordering.js', 'ordering.css', 'style.css', 'pwa.js', 'pwa.css',
+        public = {'index.html', 'app.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'style.css', 'pwa.js', 'pwa.css',
                   'service-worker.js', 'manifest.webmanifest', 'admin.html', 'admin.css', 'admin.js', 'esfihas.png', 'logo-sahara.jpg'}
         allowed_image = asset.startswith(('images/', 'icons/')) and Path(asset).suffix.lower() in ('.png', '.jpg', '.jpeg', '.svg', '.ico')
         if asset not in public and not allowed_image:

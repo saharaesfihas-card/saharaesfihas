@@ -98,7 +98,12 @@ def prompt(conn, cart):
         from . import delivery_estimates
         delivery = (f"Localização enviada, número {data['number']}" if data.get('location')
                     else f"{data['street']}, {data['number']} — {data['neighborhood']}, Maringá")
-        return (summary(conn, cart) + f"\nNome: {data['name']}\nEntrega: {delivery}"
+        fee = data.get('delivery_quote', delivery_estimates.fee_quote(conn, data.get('location')))
+        fee_summary = ''
+        if fee is not None:
+            subtotal = sum(i['quantity'] * i['price_cents'] for i in priced_items(conn, cart))
+            fee_summary = '\n' + delivery_estimates.fee_text(fee) + '\n' + ('Total do pedido: ' if fee['status'] == 'quoted' else 'Total provisório dos produtos, sem a taxa: ') + money(subtotal + (fee['amount_cents'] or 0))
+        return (summary(conn, cart) + fee_summary + f"\nNome: {data['name']}\nEntrega: {delivery}"
                 + (f"\nComplemento: {data['complement']}" if data.get('complement') else '')
                 + (f"\nObservações: {data['notes']}" if data.get('notes') else '')
                 + f"\nPagamento: {data['payment_method']} (a conferir)."
@@ -115,6 +120,8 @@ def advance(conn, cart):
     cart['stage'] = next((stage for key, stage in fields if key not in cart['data']), 'review')
     if cart['stage'] == 'review':
         cart['data']['quote'] = priced_items(conn, cart)
+        from .delivery_estimates import fee_quote
+        cart['data']['delivery_quote'] = fee_quote(conn, cart['data'].get('location'))
 
 
 def receipt(conn, cart):
@@ -220,6 +227,12 @@ def confirm(conn, cart):
         save(conn, cart)
         return 'O cardápio mudou. Confira os preços atualizados e confirme novamente.\n' + prompt(conn, cart)
     data = cart['data']
+    from .delivery_estimates import fee_quote
+    fresh_fee = fee_quote(conn, data.get('location'))
+    if fresh_fee != data.get('delivery_quote'):
+        data['delivery_quote'] = fresh_fee
+        save(conn, cart)
+        return 'A taxa de entrega mudou. Confira o total e confirme novamente.\n' + prompt(conn, cart)
     try:
         body = OrderInput.model_validate({
             'items': data['items'], 'customer': {'name': data['name'], 'phone': cart['phone']},
