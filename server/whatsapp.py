@@ -29,7 +29,7 @@ LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo
 REQUIRED = ('SAHARA_WHATSAPP_ACCESS_TOKEN', 'SAHARA_WHATSAPP_PHONE_NUMBER_ID',
             'SAHARA_WHATSAPP_APP_SECRET', 'SAHARA_WHATSAPP_VERIFY_TOKEN')
 DELIVERY_RANK = {'accepted': 0, 'sent': 1, 'delivered': 2, 'read': 3, 'failed': 4}
-MENU_IMAGE = '/images/cardapio-panfleto-20261010.png'
+MENU_IMAGE = '/images/cardapio-panfleto-20261011.png'
 
 
 def config():
