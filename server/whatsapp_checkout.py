@@ -113,8 +113,11 @@ def advance(conn, cart):
         cart['data']['quote'] = priced_items(conn, cart)
 
 
-def receipt(cart):
-    return ('Pedido #' + cart['order_id'] + ' registrado no PDV da Sahara. O pagamento ainda será conferido pela loja.'
+def receipt(conn, cart):
+    from .core import order_reference
+    order = conn.execute('SELECT id,order_number FROM orders WHERE id=?', (cart['order_id'],)).fetchone()
+    reference = order_reference(order) if order else cart['order_id']
+    return ('Pedido #' + reference + ' registrado no PDV da Sahara. O pagamento ainda será conferido pela loja.'
             '\nA equipe confirma a entrega e o prazo. Para acompanhar, envie STATUS; para receber avisos, ATIVAR AVISOS; para falar com a loja, ATENDENTE. Para outro pedido, envie NOVO PEDIDO.')
 
 
@@ -233,7 +236,7 @@ def confirm(conn, cart):
         return f'Não consegui registrar o pedido: {detail} Para ajuda, envie ATENDENTE. Nenhum pedido novo foi criado.'
     cart['stage'], cart['order_id'] = 'completed', order['id']
     save(conn, cart)
-    return receipt(cart)
+    return receipt(conn, cart)
 
 
 def handle(conn, recipient, text):
@@ -246,7 +249,7 @@ def handle(conn, recipient, text):
             cart = start(conn, recipient)
         return 'Vamos montar seu pedido pelo WhatsApp.\n' + prompt(conn, cart)
     if normalized == 'confirmar pedido' and cart and cart['stage'] == 'completed':
-        return receipt(cart)
+        return receipt(conn, cart)
     if cart and cart['expired'] and cart['stage'] not in ('completed', 'cancelled'):
         cart['stage'] = 'cancelled'
         save(conn, cart)

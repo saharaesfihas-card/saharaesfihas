@@ -45,7 +45,7 @@ class WhatsAppCheckoutTests(unittest.TestCase):
         self.assertEqual(self.rows('whatsapp_ai_usage'), [])
         reply = self.say('CONFIRMAR PEDIDO')
         order = self.rows('orders')[0]
-        self.assertIn(order['id'], reply)
+        self.assertIn(f"#{order['order_number']:03d}", reply)
         self.assertEqual(order['source'], 'whatsapp')
         self.assertEqual(order['status'], 'preparing')
         self.assertEqual(order['payment_status'], 'unpaid')
@@ -59,7 +59,7 @@ class WhatsAppCheckoutTests(unittest.TestCase):
         self.assertEqual(self.cart()['stage'], 'completed')
         self.assertEqual(self.rows('whatsapp_outbox')[-1]['kind'], 'checkout_reply')
         self.say('STATUS')
-        self.assertIn(order['id'], self.rows('whatsapp_outbox')[-1]['body'])
+        self.assertIn(f"#{order['order_number']:03d}", self.rows('whatsapp_outbox')[-1]['body'])
         self.say('ATIVAR AVISOS')
         self.assertEqual(self.rows('orders')[0]['whatsapp_opt_in'], 1)
 

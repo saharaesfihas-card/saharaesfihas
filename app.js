@@ -76,7 +76,7 @@ function checkoutMessage(prepared, registeredOrder = null) {
   ] : ['', 'Retirada na loja'];
   return [
     'Olá, Sahara! Gostaria de consultar este pedido:',
-    ...(registeredOrder ? [`Solicitação registrada: ${registeredOrder.id}`] : []), '',
+    ...(registeredOrder ? [`Solicitação registrada: #${registeredOrder.display_number || registeredOrder.id}`] : []), '',
     ...prepared.rows.map(row => `${row.quantity}x ${row.name} — ${money(row.quantity * row.priceCents)}`), '',
     `${registeredOrder ? 'Valor dos produtos registrado' : 'Subtotal dos produtos'}: ${money(registeredOrder ? registeredOrder.total_cents : prepared.totalCents)}`,
     ...addressLines,

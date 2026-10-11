@@ -82,6 +82,8 @@ class DriverDispatchTests(unittest.TestCase):
         self.assertEqual(row['kind'], 'driver_dispatch')
         self.assertEqual(row['provider'], 'evolution')
         text = row['body']
+        self.assertIn('Pedido #001\n', text)
+        self.assertNotIn(self.order_id, text)
         for value in ['Cliente teste', '44999998888', 'Avenida Teste', '25', 'Centro', 'Casa azul',
                       'Sem cebola', '2 × Carne — R$ 8,00', '1 × Queijo — R$ 4,00',
                       'Total dos produtos: R$ 12,00', 'Pagamento: Dinheiro', 'A RECEBER pelos produtos: R$ 12,00']:

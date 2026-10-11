@@ -147,7 +147,7 @@
         trackingLink.href = tracking;
         trackingLink.hidden = false;
       }
-      announce(`Solicitação ${order.id} registrada. Valor dos produtos: ${checkout.money(order.total_cents)}. Revise a mensagem no WhatsApp; a loja precisa confirmar disponibilidade, entrega e pagamento.`);
+      announce(`Solicitação #${order.display_number || order.id} registrada. Valor dos produtos: ${checkout.money(order.total_cents)}. Revise a mensagem no WhatsApp; a loja precisa confirmar disponibilidade, entrega e pagamento.`);
       if (popup) {
         try { popup.location.replace(url); } catch { try { popup.close(); } catch {} }
       }

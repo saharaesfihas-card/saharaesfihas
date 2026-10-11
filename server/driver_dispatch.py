@@ -5,6 +5,7 @@ import time
 from zoneinfo import ZoneInfo
 
 from . import whatsapp
+from .core import order_reference
 
 
 def recipient(driver):
@@ -28,7 +29,7 @@ def receipt(order, driver, received):
         address.get('neighborhood'), address.get('city') or 'Maringá, PR',
         address.get('complement'), address.get('reference')) if value)
     created = datetime.fromisoformat(order['created_at']).astimezone(ZoneInfo('America/Sao_Paulo'))
-    lines = ['SAHARA ESFIHAS — COMANDA DE ENTREGA', f"Pedido #{order['id']}",
+    lines = ['SAHARA ESFIHAS — COMANDA DE ENTREGA', f"Pedido #{order_reference(order)}",
              f"Data: {created:%d/%m/%Y %H:%M}", f"Entregador: {driver['name']}",
              f"Cliente: {order['customer_name'] or 'Não informado'}"]
     if order['customer_phone']:
@@ -85,7 +86,7 @@ def changed_receipt(conn, order, driver, received):
         return False
     if not order['maps_url'] or not recipient(driver):
         return True
-    bodies = parts(receipt(order, driver, received), order['id'])
+    bodies = parts(receipt(order, driver, received), order_reference(order))
     return ([row['body'] for row in previous] != bodies
             or any(row['phone'] != recipient(driver) for row in previous))
 
@@ -104,7 +105,7 @@ def enqueue(conn, order, driver, received=0):
     previous = previous_messages(conn, order)
     if not previous:
         preceding = ''
-        for index, body in enumerate(parts(receipt(order, driver, received), order['id'])):
+        for index, body in enumerate(parts(receipt(order, driver, received), order_reference(order))):
             event = prefix + str(index)
             whatsapp.queue(conn, event, number, 'driver_dispatch', body, order['id'], driver['id'], after_event=preceding)
             preceding = event

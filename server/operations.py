@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
-from .core import db, order_dict, require_admin, utcnow
+from .core import db, order_dict, order_reference, require_admin, utcnow
 
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
@@ -475,7 +475,7 @@ def record_sale(conn, order):
     result = conn.execute(
         """INSERT INTO cash_entries (id,created_at,kind,amount_cents,description,session_id,order_id)
            VALUES (?,?,'credit',?,?,?,?) ON CONFLICT(order_id) DO NOTHING""",
-        (_id(), utcnow(), order["total_cents"], f"Recebimento do pedido {order['id']}.",
+        (_id(), utcnow(), order["total_cents"], f"Recebimento do pedido #{order_reference(order)}.",
          active["id"] if active else None, order["id"]),
     )
     return result.rowcount == 1
@@ -619,6 +619,7 @@ def _drivers(conn):
         ):
             data = order_dict(order)
             orders.append({"id": order["id"], "customer_name": order["customer_name"],
+                           "order_number": order["order_number"], "display_number": data["display_number"],
                            "status": order["status"], "maps_url": _maps_link(data)})
         driver["orders"] = orders
         drivers.append(driver)

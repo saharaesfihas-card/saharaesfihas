@@ -84,10 +84,10 @@ class EvolutionTests(unittest.TestCase):
         own = self.order()
         key = {'id': uuid4().hex, 'fromMe': False, 'remoteJid': '999999999999@lid', 'remoteJidAlt': '5544999999999@s.whatsapp.net'}
         self.event('messages.upsert', self.message('Pedido ' + own['id'], key=key))
-        self.assertIn(own['id'], self.rows()[-1]['body'])
+        self.assertIn('#' + own['display_number'], self.rows()[-1]['body'])
         key = key | {'id': uuid4().hex, 'remoteJidAlt': '5511999999999@s.whatsapp.net'}
         self.event('messages.upsert', self.message('Pedido ' + own['id'], key=key))
-        self.assertNotIn(own['id'], self.rows()[-1]['body'])
+        self.assertNotIn('#' + own['display_number'], self.rows()[-1]['body'])
 
     def test_disconnected_queue_waits_and_order_does_not_require_meta_template(self):
         self.order()
@@ -348,7 +348,7 @@ class EvolutionTests(unittest.TestCase):
         order = self.order()
         short_key = {'id': uuid4().hex, 'fromMe': False, 'remoteJid': '554499999999@s.whatsapp.net'}
         self.assertEqual(self.event('messages.upsert', self.message('Pedido ' + order['id'], key=short_key)).status_code, 200)
-        self.assertIn(order['id'], self.rows()[-1]['body'])
+        self.assertIn('#' + order['display_number'], self.rows()[-1]['body'])
         self.assertEqual(self.rows()[-1]['phone'], '5544999999999')
         self.event('messages.upsert', self.message('PARAR', key=short_key | {'id': uuid4().hex}))
         previous_count = len([row for row in self.rows() if row['kind'] == 'order'])
@@ -411,11 +411,11 @@ class EvolutionTests(unittest.TestCase):
                 conn.execute('UPDATE orders SET customer_phone=?,whatsapp_opt_in=0 WHERE id=?', (stored, order['id']))
             key = {'id': uuid4().hex, 'fromMe': False, 'remoteJid': other + '@s.whatsapp.net'}
             self.event('messages.upsert', self.message('Pedido ' + order['id'], key=key))
-            self.assertNotIn(order['id'], self.rows()[-1]['body'])
+            self.assertNotIn('#' + order['display_number'], self.rows()[-1]['body'])
             self.assertIn('Não encontrei', self.rows()[-1]['body'])
             key = {'id': uuid4().hex, 'fromMe': False, 'remoteJid': stored + '@s.whatsapp.net'}
             self.event('messages.upsert', self.message('Pedido ' + order['id'], key=key))
-            self.assertIn(order['id'], self.rows()[-1]['body'])
+            self.assertIn('#' + order['display_number'], self.rows()[-1]['body'])
 
     def test_dashboard_missing_instance_is_ready_for_creation_not_service_failure(self):
         for code, expected in ((404, 'not_created'), (401, 'unavailable'), (500, 'unavailable')):

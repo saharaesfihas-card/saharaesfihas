@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS orders (
  payment_method TEXT NOT NULL DEFAULT '', payment_status TEXT NOT NULL DEFAULT 'unpaid', tracking_token TEXT NOT NULL,
  idempotency_key TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, stock_applied INTEGER NOT NULL DEFAULT 0,
  loyalty_applied INTEGER NOT NULL DEFAULT 0, coupon_applied INTEGER NOT NULL DEFAULT 0, courier_id TEXT,
- source TEXT NOT NULL DEFAULT 'web', notes TEXT NOT NULL DEFAULT '', confirmed_at TEXT, delivered_at TEXT
+ source TEXT NOT NULL DEFAULT 'web', notes TEXT NOT NULL DEFAULT '', confirmed_at TEXT, delivered_at TEXT,
+ order_number INTEGER
 );
 CREATE INDEX IF NOT EXISTS orders_created ON orders(created_at);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL);
@@ -43,6 +44,30 @@ CREATE TABLE IF NOT EXISTS analytics_events (name TEXT NOT NULL, created_at TEXT
 
 def utcnow():
     return datetime.now(timezone.utc).isoformat()
+
+def initialize_order_numbers(conn):
+    """Migrate display numbers without replacing IDs, links or foreign keys."""
+    conn.execute('BEGIN IMMEDIATE')
+    if 'order_number' not in {row[1] for row in conn.execute('PRAGMA table_info(orders)')}:
+        conn.execute('ALTER TABLE orders ADD COLUMN order_number INTEGER')
+    conn.execute('''CREATE TABLE IF NOT EXISTS order_number_sequence (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), value INTEGER NOT NULL CHECK(value>=0))''')
+    conn.execute('INSERT OR IGNORE INTO order_number_sequence VALUES(1,0)')
+    conn.execute('UPDATE order_number_sequence SET value=MAX(value, '
+                 '(SELECT COALESCE(MAX(order_number),0) FROM orders)) WHERE singleton=1')
+    rows = conn.execute("SELECT id FROM orders WHERE order_number IS NULL AND source<>'ifood' ORDER BY created_at,rowid").fetchall()
+    for row in rows:
+        conn.execute('UPDATE orders SET order_number=? WHERE id=?', (next_order_number(conn), row[0]))
+    conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS orders_number ON orders(order_number)')
+
+def next_order_number(conn):
+    # The caller's BEGIN IMMEDIATE also protects stock and idempotent registration.
+    conn.execute('UPDATE order_number_sequence SET value=value+1 WHERE singleton=1')
+    return conn.execute('SELECT value FROM order_number_sequence WHERE singleton=1').fetchone()[0]
+
+def order_reference(row):
+    number = dict(row).get('order_number')
+    return f'{number:03d}' if number is not None else row['id']
 
 def hash_password(password):
     if not isinstance(password, str) or len(password) < 8:
@@ -97,6 +122,7 @@ def require_admin(request: Request):
 
 def order_dict(row):
     result = dict(row)
+    result['display_number'] = order_reference(row)
     result['items'] = json.loads(result.pop('items_json'))
     result['delivery'] = json.loads(result.pop('delivery_json'))
     for key in ('tracking_token', 'request_hash', 'idempotency_key'):

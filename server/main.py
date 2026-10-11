@@ -133,6 +133,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
         conn.executescript(core.SCHEMA)
+        core.initialize_order_numbers(conn)
         operations.initialize(conn)
         marketing.initialize(conn)
         whatsapp.initialize(conn)
@@ -250,7 +251,8 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             row = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
             if not row or not hmac.compare_digest(token.encode('utf-8'), row['tracking_token'].encode('utf-8')):
                 raise HTTPException(404, 'Pedido não encontrado.')
-            return {'id': row['id'], 'status': row['status'], 'payment_status': row['payment_status'],
+            return {'id': row['id'], 'order_number': row['order_number'], 'display_number': core.order_reference(row),
+                    'status': row['status'], 'payment_status': row['payment_status'],
                     'total_cents': row['total_cents'], 'requested_for': row['requested_for'], 'items': json.loads(row['items_json'])}
 
     @app.get('/api/admin/orders')

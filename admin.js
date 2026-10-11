@@ -30,6 +30,7 @@
   ];
   const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const money = cents => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((Number(cents) || 0) / 100);
+  const orderNumber = order => order.delivery?.ifood?.display_id || order.display_number || (order.order_number ? String(order.order_number).padStart(3, '0') : order.id.slice(0, 8).toUpperCase());
   const paymentLabel = order => ({ paid: 'Pago', external_paid: 'Pago ao iFood', external_pending: 'Pagamento conforme iFood' }[order.payment_status] || 'A receber');
   const itemTotal = item => item.total_cents ?? item.price_cents * item.quantity;
   function appendOptions(target, item) {
@@ -338,7 +339,7 @@
       const ifood = order.delivery?.ifood || {};
       const card = el('article', undefined, 'order-card'); card.dataset.status = stageKey(order.status);
       const top = el('div', undefined, 'order-top');
-      const heading = el('h2', `Pedido #${ifood.display_id || order.id.slice(0, 8).toUpperCase()}`, 'order-id'); heading.title = `Pedido #${order.id}`; heading.setAttribute('aria-label', `Pedido ${order.id}`);
+      const heading = el('h2', `Pedido #${orderNumber(order)}`, 'order-id'); heading.title = `Pedido #${orderNumber(order)}`; heading.setAttribute('aria-label', `Pedido ${orderNumber(order)}`);
       top.append(heading, badge(statuses[order.status] || order.status, `status-${stageKey(order.status)}`)); card.append(top);
       if (fromIFood) card.append(el('p', 'iFood · loja de teste. Confira e gerencie as etapas no Gestor do iFood.', 'badge warning'));
       else if (order.status !== 'cancelled') card.append(orderProgress(order.status));
@@ -376,18 +377,18 @@
       const actions = el('div', undefined, 'order-actions');
       const nextStatuses = fromIFood ? [] : transitions[order.status] || [];
       if (nextStatuses.length) {
-        const statusSelect = selection(`Próxima situação do pedido ${order.id}`, nextStatuses.map(key => [key, statuses[key]]));
+        const statusSelect = selection(`Próxima situação do pedido ${orderNumber(order)}`, nextStatuses.map(key => [key, statuses[key]]));
         actions.append(statusSelect, button('Atualizar situação', async () => {
-          if (statusSelect.value === 'cancelled' && !window.confirm(`Cancelar o pedido #${order.id}?`)) return;
+          if (statusSelect.value === 'cancelled' && !window.confirm(`Cancelar o pedido #${orderNumber(order)}?`)) return;
           await saved(`/admin/orders/${encodeURIComponent(order.id)}`, { status: statusSelect.value }, 'Situação do pedido atualizada.', 'PATCH');
         }, 'small-button status-action'));
       }
       if (!fromIFood && order.payment_status !== 'paid' && order.status !== 'cancelled') actions.append(button('Registrar pagamento', async () => {
-        if (!window.confirm(`Confirmar que o pagamento de ${money(order.total_cents)} do pedido #${order.id} foi recebido?`)) return;
+        if (!window.confirm(`Confirmar que o pagamento de ${money(order.total_cents)} do pedido #${orderNumber(order)} foi recebido?`)) return;
         await saved(`/admin/orders/${encodeURIComponent(order.id)}/payment`, { status: 'paid' }, 'Pagamento recebido e registrado.');
       }));
       actions.append(button('Imprimir comanda', () => printOrder(order)));
-      const drivers = selection(`Entregador do pedido ${order.id}`, [['', 'Escolher entregador'], ...state.drivers.filter(driver => driver.active !== false).map(driver => [driver.id, driver.name])]);
+      const drivers = selection(`Entregador do pedido ${orderNumber(order)}`, [['', 'Escolher entregador'], ...state.drivers.filter(driver => driver.active !== false).map(driver => [driver.id, driver.name])]);
       drivers.value = String(order.courier_id || '');
       if (!fromIFood && state.drivers.length && !['delivered', 'cancelled'].includes(order.status)) actions.append(drivers, button('Atribuir entrega', async () => {
         const result = await api(`/admin/orders/${encodeURIComponent(order.id)}/driver`, { method: 'PATCH', body: { driver_id: drivers.value || null } });
@@ -396,7 +397,7 @@
         await renderView();
       }));
       card.append(actions); cards.append(card);
-      searchable.push([card, normalize([order.id, ifood.order_id, ifood.display_id, order.customer_name, order.customer_phone].join(' '))]);
+      searchable.push([card, normalize([order.id, order.display_number, `#${orderNumber(order)}`, ifood.order_id, ifood.display_id, order.customer_name, order.customer_phone].join(' '))]);
     }
     const empty = emptyState('Nenhum pedido por aqui', 'Os pedidos recebidos pelo cardápio ou registrados no PDV aparecerão nesta área.');
     screen.append(cards, empty);
@@ -414,7 +415,7 @@
   function printOrder(order) {
     const target = $('print-target'); target.replaceChildren();
     const ifood = order.delivery?.ifood;
-    target.append(el('h1', 'SAHARA ESFIHAS'), el('p', 'Somente delivery · (44) 99174-8318'), el('hr'), el('h2', `Pedido #${order.id}`), el('p', date(order.created_at)));
+    target.append(el('h1', 'SAHARA ESFIHAS'), el('p', 'Somente delivery · (44) 99174-8318'), el('hr'), el('h2', `Pedido #${orderNumber(order)}`), el('p', date(order.created_at)));
     if (order.requested_for) target.append(el('p', `Agendado: ${date(order.requested_for)}`));
     if (ifood) target.append(el('p', `iFood · TESTE · Pedido ${ifood.display_id || ifood.order_id}`), el('p', 'Etapas e entrega devem ser conferidas no Gestor do iFood.'));
     target.append(el('p', `${order.customer_name || 'Cliente'} · ${order.customer_phone || ''}`));
@@ -598,14 +599,14 @@
     const p = panel('Valores a receber'); p.append(table('Fiado', [['Cliente', row => row.customer_name], ['Descrição', row => row.description], ['Valor', row => money(row.amount_cents)], ['Recebido', row => money(row.paid_cents)], ['Em aberto', row => money(row.balance_cents ?? row.amount_cents - (row.paid_cents || 0))]], rows)); screen.append(p);
     const add = panel('Registrar fiado'); const f = createForm('Registrar valor a receber', data => saved('/admin/receivables', { customer_name: get(data, 'customer_name'), phone: get(data, 'phone'), description: get(data, 'description'), amount_cents: cents(get(data, 'amount')), due_date: get(data, 'due_date') || null, order_id: get(data, 'order_id') || null }, 'Valor a receber registrado.'));
     field(f.grid, 'customer_name', 'Nome do cliente', { required: true, maxLength: 100 }); field(f.grid, 'phone', 'Telefone', { type: 'tel', maxLength: 25 }); field(f.grid, 'amount', 'Valor (R$)', { type: 'number', min: '0.01', step: '0.01', required: true }); field(f.grid, 'due_date', 'Vencimento (opcional)', { type: 'date' }); field(f.grid, 'description', 'Descrição', { required: true, wide: true, maxLength: 300 }); add.append(f.form); screen.append(add);
-    const orderSelect = field(f.grid, 'order_id', 'Vincular a um pedido (opcional)', { type: 'select', wide: true, choices: [['', 'Fiado sem vínculo com pedido'], ...availableOrders.map(order => [order.id, `#${order.id} · ${order.customer_name || 'Cliente'} · ${money(order.total_cents)}`])] });
+    const orderSelect = field(f.grid, 'order_id', 'Vincular a um pedido (opcional)', { type: 'select', wide: true, choices: [['', 'Fiado sem vínculo com pedido'], ...availableOrders.map(order => [order.id, `#${orderNumber(order)} · ${order.customer_name || 'Cliente'} · ${money(order.total_cents)}`])] });
     orderSelect.addEventListener('change', () => {
       const order = availableOrders.find(row => row.id === orderSelect.value);
       if (!order) return;
       f.form.elements.namedItem('customer_name').value = order.customer_name || '';
       f.form.elements.namedItem('phone').value = order.customer_phone || '';
       f.form.elements.namedItem('amount').value = (order.total_cents / 100).toFixed(2);
-      f.form.elements.namedItem('description').value = `Pedido #${order.id}`;
+      f.form.elements.namedItem('description').value = `Pedido #${orderNumber(order)}`;
     });
     const unpaid = rows.filter(row => numeric(row.balance_cents ?? row.amount_cents - (row.paid_cents || 0)) > 0);
     if (unpaid.length) {
@@ -680,7 +681,7 @@
     p.append(table('Entregadores da loja', [['Nome', row => row.name], ['Telefone', row => row.phone], ['Situação', row => row.active === false ? 'Inativo' : 'Ativo'], ['Entregas em andamento', row => {
       const deliveries = el('div');
       for (const order of row.orders || []) {
-        const line = el('p', `#${order.id} · ${statuses[order.status] || order.status}`);
+        const line = el('p', `#${orderNumber(order)} · ${statuses[order.status] || order.status}`);
         if (order.maps_url) {
           const link = el('a', 'Abrir rota ↗'); link.href = order.maps_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; line.append(el('br'), link);
         }
@@ -695,7 +696,7 @@
 
   async function loadReviews(screen) {
     const data = await api('/admin/reviews'); const p = panel('Avaliações recebidas');
-    p.append(table('Avaliações dos clientes', [['Data', row => date(row.created_at)], ['Pedido', row => `#${row.order_id}`], ['Cliente', row => row.customer_name || 'Cliente'], ['Nota', row => `${row.rating} / 5`], ['Comentário', row => row.comment || 'Sem comentário']], list(data, 'reviews'), 'Nenhuma avaliação recebida por enquanto.')); screen.append(p);
+    p.append(table('Avaliações dos clientes', [['Data', row => date(row.created_at)], ['Pedido', row => `#${row.display_number || row.order_id}`], ['Cliente', row => row.customer_name || 'Cliente'], ['Nota', row => `${row.rating} / 5`], ['Comentário', row => row.comment || 'Sem comentário']], list(data, 'reviews'), 'Nenhuma avaliação recebida por enquanto.')); screen.append(p);
   }
 
   async function loadIntegrations(screen) {

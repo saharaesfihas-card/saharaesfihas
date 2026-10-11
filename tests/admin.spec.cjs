@@ -239,19 +239,19 @@ async function run() {
     customer = (await api('/admin/customers')).customers.find(row => row.phone === '44999991111');
     assert.equal(customer.points, 0);
   });
-  await check('Order search filters client, phone and short ID locally while preserving full identifiers', async () => {
+  await check('Order search supports sequential number, client, phone and internal ID', async () => {
     const requests = [];
     const capture = request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(request.url()); };
     page.on('request', capture);
     try {
       const heading = page.locator('.order-card h2');
-      assert.match(await heading.innerText(), new RegExp(order.id.slice(0, 8).toUpperCase()));
-      assert.ok([await heading.getAttribute('title'), await heading.getAttribute('aria-label')].some(value => value?.includes(order.id)));
+      assert.match(await heading.innerText(), new RegExp(`#${order.display_number}`));
+      assert.ok([await heading.getAttribute('title'), await heading.getAttribute('aria-label')].every(value => value?.includes(order.display_number)));
       const overview = label => page.locator('.overview-card').filter({ has: page.getByText(label, { exact: true }) }).locator('.overview-value');
       assert.equal(await overview('Em preparo na cozinha').innerText(), '1');
       assert.equal(await overview('Pedido pronto').innerText(), '0');
       const search = page.getByRole('searchbox', { name: 'Buscar pedidos', exact: true });
-      for (const query of ['Cliente teste', '44999991111', order.id.slice(0, 8)]) {
+      for (const query of ['Cliente teste', '44999991111', order.id.slice(0, 8), `#${order.display_number}`]) {
         await search.fill(query); assert.equal(await page.locator('.order-card:visible').count(), 1);
       }
       await search.fill('zzzz-sem-pedido'); assert.equal(await page.locator('.order-card:visible').count(), 0);
@@ -268,9 +268,9 @@ async function run() {
     assert.equal(await page.locator('.order-progress [aria-current="step"] .stage-label').innerText(), 'Pedido pronto');
     assert.equal((await api('/admin/inventory')).items.find(row => row.id === flour.id).on_hand, 980);
     await page.getByRole('button', { name: 'Imprimir comanda', exact: true }).click();
-    assert.equal(await page.evaluate(() => window.__printCalls), 1); assert.match(await page.locator('#print-target').textContent(), /Cliente teste/);
+    assert.equal(await page.evaluate(() => window.__printCalls), 1); assert.match(await page.locator('#print-target').textContent(), /Cliente teste/); assert.match(await page.locator('#print-target').textContent(), new RegExp(`#${order.display_number}`));
     const driver = (await api('/admin/drivers')).drivers[0];
-    await page.getByRole('combobox', { name: `Entregador do pedido ${order.id}`, exact: true }).selectOption(driver.id);
+    await page.getByRole('combobox', { name: `Entregador do pedido ${order.display_number}`, exact: true }).selectOption(driver.id);
     const assignment = await submit('Atribuir entrega', `/admin/orders/${order.id}/driver`, 'PATCH');
     assert.ok(assignment.dispatch?.message, 'Assignment must explain whether the receipt was queued');
     assert.equal(await page.locator('#notice').innerText(), assignment.dispatch.message);
@@ -290,13 +290,13 @@ async function run() {
   });
   await check('Partial receipts prevent cancellation and delivery updates remain real', async () => {
     await view('orders');
-    const choice = page.getByRole('combobox', { name: `Próxima situação do pedido ${order.id}`, exact: true });
+    const choice = page.getByRole('combobox', { name: `Próxima situação do pedido ${order.display_number}`, exact: true });
     await choice.selectOption('cancelled');
     const response = page.waitForResponse(response => response.url().endsWith(`/api/admin/orders/${order.id}`) && response.request().method() === 'PATCH');
     await page.getByRole('button', { name: 'Atualizar situação', exact: true }).click();
     assert.equal((await response).status(), 409);
     for (const status of ['out_for_delivery', 'delivered']) {
-      await page.getByRole('combobox', { name: `Próxima situação do pedido ${order.id}`, exact: true }).selectOption(status);
+      await page.getByRole('combobox', { name: `Próxima situação do pedido ${order.display_number}`, exact: true }).selectOption(status);
       await submit('Atualizar situação', `/admin/orders/${order.id}`, 'PATCH');
       if (status === 'delivered') await page.getByRole('combobox', { name: 'Filtrar pedidos por situação', exact: true }).selectOption('all');
       await page.locator('#screen[aria-busy="false"]').waitFor();
@@ -422,14 +422,14 @@ async function run() {
       await client.locator('#checkout').click();
       const received = await response; assert.equal(received.status(), 201); const registered = await received.json(); assert.equal(registered.total_cents, 400);
       await client.locator('#checkout[aria-busy="false"]').waitFor();
-      assert.match(await client.locator('#order-status').innerText(), new RegExp(registered.id));
+      assert.match(await client.locator('#order-status').innerText(), new RegExp(`#${registered.display_number}`));
       assert.match(await client.locator('#order-status').innerText(), /4,00/);
       const after = (await api('/admin/orders')).orders; assert.equal(after.length, before.length + 1);
       const actual = after.find(row => row.id === registered.id); assert.ok(actual); assert.equal(actual.source, 'web'); assert.equal(actual.payment_status, 'unpaid'); assert.equal(actual.items[0].price_cents, 400); assert.equal(actual.customer_name, 'Cliente do cardápio'); assert.equal(actual.delivery.number, '22');
       await client.locator('#checkout').click(); await client.locator('#checkout[aria-busy="false"]').waitFor();
       assert.equal((await api('/admin/orders')).orders.length, after.length);
       const opened = await client.evaluate(() => window.__whatsappUrls); assert.equal(opened.length, 2); assert.match(opened[0], /^https:\/\/wa\.me\/5544991748318\?text=/);
-      assert.match(decodeURIComponent(opened[0]), new RegExp(registered.id));
+      assert.match(decodeURIComponent(opened[0]), new RegExp(`#${registered.display_number}`));
       assert.equal(await client.locator('#order-whatsapp').isVisible(), true);
     } finally { await context.close(); }
   });

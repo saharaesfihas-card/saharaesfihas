@@ -17,7 +17,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
-from .core import db, require_admin, utcnow
+from .core import db, require_admin, utcnow, order_reference
 
 router = APIRouter()
 ADMIN = [Depends(require_admin)]
@@ -549,8 +549,8 @@ def create_campaign(body: CampaignCreate, request: Request) -> dict[str, Any]:
 @router.get("/api/admin/reviews", dependencies=ADMIN)
 def reviews(request: Request) -> dict[str, Any]:
     with db(request) as conn:
-        rows = conn.execute("SELECT * FROM reviews ORDER BY created_at DESC LIMIT 1000").fetchall()
-    return {"reviews": [dict(row) for row in rows]}
+        rows = conn.execute("SELECT r.*,o.order_number FROM reviews r JOIN orders o ON o.id=r.order_id ORDER BY r.created_at DESC LIMIT 1000").fetchall()
+    return {"reviews": [dict(row) | {"display_number": order_reference({'id': row['order_id'], 'order_number': row['order_number']})} for row in rows]}
 
 
 @router.post("/api/orders/{order_id}/review", status_code=201)

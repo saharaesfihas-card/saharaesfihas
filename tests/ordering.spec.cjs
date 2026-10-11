@@ -117,7 +117,7 @@ async function whatsappMessage(page) {
 }
 
 const success = {
-  id: 'order-123', total_cents: 450, tracking_token: 'token',
+  id: 'order-123', order_number: 1, display_number: '001', total_cents: 450, tracking_token: 'token',
   tracking_url: '/tracking#order=order-123&token=token', status: 'new',
 };
 
@@ -252,7 +252,8 @@ async function run() {
     release();
     await page.waitForFunction(() => window.__navigated.some(url => url.startsWith('https://wa.me/')));
     const message = await whatsappMessage(page);
-    assert.match(message, /order-123/);
+    assert.match(message, /Solicitação registrada: #001/);
+    assert.doesNotMatch(message, /order-123/);
     assert.match(message, /1x Carne.*4,00/);
     assert.match(message, /Valor dos produtos registrado: R\$\s*4,50/, 'The registered total must come from the API, not the preview');
     assert.match(await page.locator('#order-status').innerText(), /R\$\s*4,50/);
@@ -312,10 +313,10 @@ async function run() {
     assert.equal(requests.length, 2);
     assert.equal(requestKey(requests[0]), requestKey(requests[1]));
     const message = await whatsappMessage(page);
-    assert.match(message, /Solicitação registrada: order-123/);
+    assert.match(message, /Solicitação registrada: #001/);
     assert.match(message, /Valor dos produtos registrado: R\$\s*4,50/);
     const status = await page.locator('#order-status').innerText();
-    assert.match(status, /order-123/);
+    assert.match(status, /#001/);
     assert.match(status, /R\$\s*4,50/);
     assert.doesNotMatch(status, /pago|enviado|confirmado automaticamente/i);
     assert.equal(await page.locator('#order-tracking').isVisible(), true);
@@ -333,7 +334,7 @@ async function run() {
     const href = await page.locator('#order-whatsapp').getAttribute('href');
     const url = new URL(href);
     assert.equal(url.origin, 'https://wa.me');
-    assert.match(url.searchParams.get('text'), /order-123/);
+    assert.match(url.searchParams.get('text'), /#001/);
     assert.equal(await page.locator('#order-status').getAttribute('role'), 'status');
     assert.match(await page.locator('#order-status').innerText(), /registrad/i);
     assert.doesNotMatch(await page.locator('#order-status').innerText(), /pago|enviado|confirmado/i);
@@ -362,7 +363,7 @@ async function run() {
     await page.locator('#checkout').click();
     await page.locator('#order-whatsapp').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#order-tracking').isVisible(), false);
-    assert.match(await whatsappMessage(page), /order-123/);
+    assert.match(await whatsappMessage(page), /#001/);
   }, { apiBase: '/api' });
 
   await test('API orders include a GPS point only after the customer confirms it', async page => {

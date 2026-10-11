@@ -7,7 +7,7 @@ import uuid
 from fastapi import HTTPException
 
 from . import marketing, operations, whatsapp
-from .core import utcnow
+from .core import utcnow, next_order_number, order_reference
 
 
 def register_order(conn, body, source='web'):
@@ -21,7 +21,8 @@ def register_order(conn, body, source='web'):
     if existing:
         if existing['request_hash'] != fingerprint:
             raise HTTPException(409, 'Este identificador já foi usado para outro pedido.')
-        return {'id': existing['id'], 'status': existing['status'], 'total_cents': existing['total_cents'],
+        return {'id': existing['id'], 'order_number': existing['order_number'], 'display_number': order_reference(existing),
+                'status': existing['status'], 'total_cents': existing['total_cents'],
                 'tracking_token': existing['tracking_token'], 'tracking_url': None, 'replayed': True}
     requested_for = schedule(body.requested_for)
     ids = [item.id for item in body.items]
@@ -54,12 +55,13 @@ def register_order(conn, body, source='web'):
         point = body.delivery.location
         delivery['location']['url'] = f'https://www.google.com/maps?q={point.latitude:.6f},{point.longitude:.6f}'
     order_id, tracking = uuid.uuid4().hex, secrets.token_urlsafe(24)
+    number = next_order_number(conn)
     conn.execute('''INSERT INTO orders(id,created_at,requested_for,customer_id,customer_name,customer_phone,
         delivery_json,items_json,subtotal_cents,discount_cents,total_cents,coupon_code,payment_method,
-        tracking_token,idempotency_key,request_hash,source,notes,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        tracking_token,idempotency_key,request_hash,source,notes,status,order_number) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (order_id, utcnow(), requested_for, customer_id, body.customer.name, body.customer.phone,
          json.dumps(delivery, ensure_ascii=False), json.dumps(items, ensure_ascii=False), subtotal, discount,
-         subtotal - discount, code, body.payment_method, tracking, body.idempotency_key, fingerprint, source, body.notes, 'preparing'))
+         subtotal - discount, code, body.payment_method, tracking, body.idempotency_key, fingerprint, source, body.notes, 'preparing', number))
     order = conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone()
     operations.apply_stock(conn, order)
     marketing.record_coupon_use(conn, order)
@@ -68,6 +70,7 @@ def register_order(conn, body, source='web'):
     conn.execute('INSERT INTO order_events VALUES(?,?,?,?)', (uuid.uuid4().hex, order_id, 'preparing', utcnow()))
     conn.execute('UPDATE orders SET whatsapp_opt_in=? WHERE id=?', (int(body.customer.whatsapp_opt_in), order_id))
     whatsapp.order_notice(conn, conn.execute('SELECT * FROM orders WHERE id=?', (order_id,)).fetchone())
-    return {'id': order_id, 'status': 'preparing', 'total_cents': subtotal - discount, 'tracking_token': tracking,
+    return {'id': order_id, 'order_number': number, 'display_number': f'{number:03d}',
+            'status': 'preparing', 'total_cents': subtotal - discount, 'tracking_token': tracking,
             'tracking_url': None, 'replayed': False}
 

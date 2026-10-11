@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .core import db, require_admin, utcnow
+from .core import db, require_admin, utcnow, order_reference
 from . import evolution, whatsapp_ai, whatsapp_checkout
 
 router = APIRouter()
@@ -193,7 +193,7 @@ def order_notice(conn, order):
     contact = contact_identity(conn, recipient)
     if contact and contact['opted_out']:
         return
-    text = f"Sahara: seu pedido #{order['id']} está {LABELS.get(order['status'], order['status'])}."
+    text = f"Sahara: seu pedido #{order_reference(order)} está {LABELS.get(order['status'], order['status'])}."
     queue(conn, f"order:{order['id']}:{order['status']}", recipient, 'order', text, order['id'], order['status'])
 
 
@@ -253,16 +253,19 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False):
     if normalized == '4' or re.search(r'\b(pix|pagamento|pagar|cartao|dinheiro)\b', normalized):
         return 'Aceitamos Pix, dinheiro, cartão de crédito e débito. Os dados do Pix e a confirmação do pagamento são combinados com a equipe. Envie ATENDENTE para falar com a loja.'
     new_request = allow_ai and re.search(r'\b(novo pedido|(?:fazer|montar|criar|fechar)\s+(?:um |meu |o )?pedido)\b', normalized)
-    if not new_request and (normalized == '2' or re.search(r'\b(status|pedido|solicitacao|andamento)\b', normalized)):
+    if not new_request and (normalized == '2' or re.search(r'\b(status|pedido|solicitacao|andamento)\b', normalized)
+                            or re.fullmatch(r'#\s*\d{1,12}', normalized)):
         # Nunca confia no número ou ID escritos no texto: a identidade vem do webhook assinado.
         matches = re.findall(r'\b[0-9a-f]{32}\b', normalized)
+        numbers = re.findall(r'(?:#\s*|\bpedido\s+)(\d{1,12})\b', normalized)
         aliases = order_phone_aliases(recipient)
         placeholders = ','.join('?' for _ in aliases)
         rows = conn.execute(f'SELECT * FROM orders WHERE customer_phone IN ({placeholders}) ORDER BY created_at DESC LIMIT 10',
                             aliases).fetchall()
-        order = next((row for row in rows if row['id'] in matches), None) if matches else (rows[0] if rows else None)
+        order = (next((row for row in rows if row['id'] in matches or str(row['order_number']) in {str(int(n)) for n in numbers}), None)
+                 if matches or numbers else (rows[0] if rows else None))
         if order:
-            return f"Seu pedido #{order['id']} está {LABELS.get(order['status'], order['status'])}. Para dúvidas ou alterações, envie ATENDENTE. Para autorizar avisos de andamento, envie ATIVAR AVISOS."
+            return f"Seu pedido #{order_reference(order)} está {LABELS.get(order['status'], order['status'])}. Para dúvidas ou alterações, envie ATENDENTE. Para autorizar avisos de andamento, envie ATIVAR AVISOS."
         return 'Não encontrei um pedido associado ao seu número de WhatsApp. Informe esse número ao finalizar no cardápio ou envie ATENDENTE.'
     if allow_ai and normalized not in ('1', 'menu', 'oi', 'ola', 'bom dia', 'boa tarde', 'boa noite'):
         return whatsapp_ai.PENDING
@@ -541,7 +544,7 @@ def payload(conn, row, cfg):
         if not preceding or preceding['status'] not in ('accepted', 'sent', 'delivered', 'read'):
             return None, 'skipped', 'A mensagem anterior não teve envio confirmado.'
     if row['kind'] == 'order':
-        order = conn.execute('SELECT whatsapp_opt_in,status FROM orders WHERE id=?', (row['order_id'],)).fetchone()
+        order = conn.execute('SELECT id,order_number,whatsapp_opt_in,status FROM orders WHERE id=?', (row['order_id'],)).fetchone()
         if not order or not order['whatsapp_opt_in'] or (contact and contact['opted_out']):
             return None, 'skipped', 'Avisos não autorizados pelo cliente.'
         if order['status'] != row['order_status']:
@@ -560,7 +563,7 @@ def payload(conn, row, cfg):
         return base | {'type': 'text', 'text': {'preview_url': False, 'body': row['body']}}, None, None
     if row['kind'] == 'order' and cfg['template']:
         return base | {'type': 'template', 'template': {'name': cfg['template'], 'language': {'code': cfg['language']},
-                       'components': [{'type': 'body', 'parameters': [{'type': 'text', 'text': row['order_id']},
+                       'components': [{'type': 'body', 'parameters': [{'type': 'text', 'text': order_reference(order)},
                                        {'type': 'text', 'text': LABELS[row['order_status']]}]}]}}, None, None
     return None, 'blocked', 'Fora da janela de 24 horas. Avisos de pedidos precisam de modelo aprovado pela Meta.'
 
