@@ -526,6 +526,11 @@ def connect_evolution(request: Request):
 
 
 def payload(conn, row, cfg):
+    if row['kind'] == 'driver_dispatch':
+        from .driver_dispatch import stale_reason
+        reason = stale_reason(conn, row)
+        if reason:
+            return None, 'skipped', reason
     contact = contact_identity(conn, row['phone'])
     if row['kind'] in ('ai_reply', 'checkout_reply', 'welcome', 'menu_image') and contact and contact['human_until'] > int(time.time()):
         return None, 'skipped', 'Atendimento automático pausado para a equipe.'

@@ -271,7 +271,9 @@ async function run() {
     assert.equal(await page.evaluate(() => window.__printCalls), 1); assert.match(await page.locator('#print-target').textContent(), /Cliente teste/);
     const driver = (await api('/admin/drivers')).drivers[0];
     await page.getByRole('combobox', { name: `Entregador do pedido ${order.id}`, exact: true }).selectOption(driver.id);
-    await submit('Atribuir entrega', `/admin/orders/${order.id}/driver`, 'PATCH');
+    const assignment = await submit('Atribuir entrega', `/admin/orders/${order.id}/driver`, 'PATCH');
+    assert.ok(assignment.dispatch?.message, 'Assignment must explain whether the receipt was queued');
+    assert.equal(await page.locator('#notice').innerText(), assignment.dispatch.message);
     assert.equal((await api('/admin/orders')).orders[0].courier_id, driver.id);
     const delivery = (await api('/admin/drivers')).drivers[0].orders[0]; assert.equal(delivery.id, order.id); assert.match(delivery.maps_url, /^https:\/\/www\.google\.com\/maps\/dir\//);
   });

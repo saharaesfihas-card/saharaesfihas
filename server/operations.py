@@ -190,6 +190,8 @@ def initialize(conn):
     ]
     for statement in statements:
         conn.execute(statement)
+    if "courier_assignment_key" not in {row[1] for row in conn.execute("PRAGMA table_info(orders)")}:
+        conn.execute("ALTER TABLE orders ADD COLUMN courier_assignment_key TEXT NOT NULL DEFAULT ''")
     # Preserva bases inicializadas por versões anteriores destas instruções.
     if "receivable_payment_id" not in {row[1] for row in conn.execute("PRAGMA table_info(cash_entries)")}:
         conn.execute("ALTER TABLE cash_entries ADD COLUMN receivable_payment_id TEXT REFERENCES receivable_payments(id)")
@@ -593,10 +595,13 @@ def _maps_link(order):
     if valid:
         destination = f"{lat},{lng}"
     else:
-        parts = [delivery.get(key) for key in ("street", "house_number", "number", "neighborhood", "city")]
+        parts = [delivery.get("street"), delivery.get("number") or delivery.get("house_number"),
+                 delivery.get("neighborhood"), delivery.get("city")]
         destination = ", ".join(str(part).strip() for part in parts if part)
         if not destination:
             destination = str(delivery.get("address", "")).strip()
+        if destination and not delivery.get("city"):
+            destination += ", Maringá, PR"
     if not destination:
         return None
     return "https://www.google.com/maps/dir/?" + urlencode({"api": "1", "destination": destination})
@@ -640,20 +645,33 @@ def save_driver(payload: DriverInput, request: Request):
 
 @router.patch("/orders/{order_id}/driver")
 def assign_driver(order_id: str, payload: DriverAssignment, request: Request):
+    from . import driver_dispatch
     with db(request) as conn:
         order = _found(conn, "orders", order_id, "Pedido não encontrado.")
         if order['source'] == 'ifood':
             raise HTTPException(409, 'Gerencie a entrega deste pedido de teste no Gestor do iFood.')
         if order["status"] in ("delivered", "cancelled", "canceled"):
             raise HTTPException(409, "Não é possível alterar o entregador de um pedido encerrado.")
+        driver = None
         if payload.driver_id:
             driver = _found(conn, "drivers", payload.driver_id, "Entregador não encontrado.")
             if not driver["active"]:
                 raise HTTPException(409, "O entregador está inativo.")
-        conn.execute("UPDATE orders SET courier_id=? WHERE id=?", (payload.driver_id, order_id))
+        changed = order["courier_id"] != payload.driver_id or not order["courier_assignment_key"]
+        received = receivable_payment_total(conn, order_id)
+        if not changed and driver:
+            current = order_dict(order)
+            current['maps_url'] = _maps_link(current)
+            changed = driver_dispatch.changed_receipt(conn, current, driver, received)
+        if changed:
+            conn.execute("UPDATE orders SET courier_id=?,courier_assignment_key=? WHERE id=?",
+                         (payload.driver_id, uuid.uuid4().hex, order_id))
+            conn.execute("""UPDATE whatsapp_outbox SET status='skipped',error='A atribuição do entregador foi alterada.',updated_at=?
+                WHERE order_id=? AND kind='driver_dispatch' AND status IN ('pending','blocked')""", (utcnow(), order_id))
         result = order_dict(conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
         result["maps_url"] = _maps_link(result)
-        return {"order": result, "drivers": _drivers(conn)["drivers"]}
+        dispatch = driver_dispatch.enqueue(conn, result, driver, received)
+        return {"order": result, "drivers": _drivers(conn)["drivers"], "dispatch": dispatch}
 
 
 def _printers(conn):

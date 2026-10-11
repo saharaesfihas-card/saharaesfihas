@@ -390,7 +390,10 @@
       const drivers = selection(`Entregador do pedido ${order.id}`, [['', 'Escolher entregador'], ...state.drivers.filter(driver => driver.active !== false).map(driver => [driver.id, driver.name])]);
       drivers.value = String(order.courier_id || '');
       if (!fromIFood && state.drivers.length && !['delivered', 'cancelled'].includes(order.status)) actions.append(drivers, button('Atribuir entrega', async () => {
-        await saved(`/admin/orders/${encodeURIComponent(order.id)}/driver`, { driver_id: drivers.value || null }, drivers.value ? 'Entregador atribuído.' : 'Entregador removido.', 'PATCH');
+        const result = await api(`/admin/orders/${encodeURIComponent(order.id)}/driver`, { method: 'PATCH', body: { driver_id: drivers.value || null } });
+        const status = result.dispatch?.status;
+        showNotice(result.dispatch?.message || (drivers.value ? 'Entregador atribuído.' : 'Entregador removido.'), ['invalid_phone', 'missing_address', 'not_configured', 'uncertain', 'failed', 'blocked', 'skipped'].includes(status));
+        await renderView();
       }));
       card.append(actions); cards.append(card);
       searchable.push([card, normalize([order.id, ifood.order_id, ifood.display_id, order.customer_name, order.customer_phone].join(' '))]);
@@ -673,7 +676,7 @@
 
   async function loadDrivers(screen) {
     const data = await api('/admin/drivers');
-    const p = panel('Entregadores', 'As rotas abrem no Google Maps. A lista mostra pedidos atribuídos em andamento e não acompanha a localização do entregador.');
+    const p = panel('Entregadores', 'Ao atribuir uma entrega, a comanda com a rota no Google Maps entra na fila do WhatsApp da loja para o número cadastrado do entregador. Confira os envios em Integrações → WhatsApp.');
     p.append(table('Entregadores da loja', [['Nome', row => row.name], ['Telefone', row => row.phone], ['Situação', row => row.active === false ? 'Inativo' : 'Ativo'], ['Entregas em andamento', row => {
       const deliveries = el('div');
       for (const order of row.orders || []) {
