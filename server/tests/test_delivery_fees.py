@@ -142,6 +142,9 @@ class WhatsAppFeeTests(unittest.TestCase):
         for amount in ['grátis', 'R$ 4,00', 'R$ 5,00', 'R$ 8,00', 'R$ 10,00']:
             self.assertIn(amount,reply)
         self.assertNotIn('-51.9108',reply)
+        repeated = self.say('A entrega é grátis?')
+        self.assertIn('R$ 4,00',repeated)
+        self.assertNotIn('automático está pausado',repeated)
 
     def test_cart_fee_review_and_confirmation_after_changed_policy(self):
         self.configure()

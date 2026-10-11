@@ -237,7 +237,7 @@ def response(conn, recipient, text='', location=None):
                     + '. ' + (fee_text({'status': 'quoted', 'amount_cents': fee_cents(distance, cfg['above_seven'])})
                     if cfg['fees_enabled'] and fee_cents(distance, cfg['above_seven']) is not None else fee_text(None))
                     + ' O valor depende da localização confirmada.') if estimate else handoff(conn, recipient)
-        if previous and previous['awaiting'] and not requested:
+        if previous and previous['awaiting'] and not requested and not fee_intent:
             return handoff(conn, recipient)
         save(conn, recipient, awaiting=True)
         return policy(conn) + '\nPara estimar para seu endereço, envie a localização de entrega pelo WhatsApp. Se não conseguir, o atendente define o prazo.'
