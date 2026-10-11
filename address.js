@@ -3,6 +3,8 @@
 
   const form = document.querySelector('#delivery-form');
   const button = document.querySelector('#use-location');
+  const buttonLabel = button.querySelector('.location-button-label');
+  const buttonHint = button.querySelector('.location-button-hint');
   const status = document.querySelector('#location-status');
   const card = document.querySelector('#location-card');
   const map = document.querySelector('#location-map');
@@ -50,7 +52,8 @@
     } else {
       map.removeAttribute('href');
     }
-    button.textContent = busy ? 'Buscando localização…' : selected ? 'Atualizar localização' : 'Usar minha localização';
+    buttonLabel.textContent = busy ? 'Buscando localização…' : selected ? 'Atualizar localização' : 'Usar minha localização';
+    buttonHint.textContent = busy ? 'Aguarde enquanto encontramos seu ponto' : selected ? 'Escolha outro ponto de entrega' : 'Encontre seu ponto de entrega';
     button.disabled = busy;
     button.setAttribute('aria-busy', String(busy));
     const delivery = form.querySelector('[name="fulfillment"]').value === 'delivery';

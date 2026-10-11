@@ -4,7 +4,7 @@
   const checkout = window.saharaCheckout;
   const form = document.querySelector('#delivery-form');
   if (!checkout || !form) return;
-  const payment = form.querySelector('.payment-methods');
+  const deliveryAddress = form.querySelector('#delivery-address');
   const contactSection = document.createElement('fieldset');
   contactSection.className = 'ordering-fields';
   contactSection.innerHTML = `
@@ -16,7 +16,7 @@
     <label class="ordering-consent" for="whatsapp-opt-in"><input id="whatsapp-opt-in" name="whatsapp-opt-in" type="checkbox"><span>Quero receber avisos deste pedido no WhatsApp (opcional).</span></label>
     <label class="ordering-consent" for="marketing-opt-in"><input id="marketing-opt-in" name="marketing-opt-in" type="checkbox"><span>Quero receber ofertas da Sahara no WhatsApp (opcional).</span></label>
     <p class="ordering-note">O pedido funciona sem criar uma conta. Os avisos dependem da conexão da loja com o WhatsApp. Para interrompê-los, envie PARAR. A autorização para ofertas é separada.</p>`;
-  form.insertBefore(contactSection, payment);
+  form.insertBefore(contactSection, deliveryAddress);
   const whatsappConsent = contactSection.querySelector('#whatsapp-opt-in');
   whatsappConsent.addEventListener('change', () => {
     contactSection.querySelector('#customer-phone').required = whatsappConsent.checked;
@@ -178,7 +178,7 @@
       return 'Você pode indicar Pix, dinheiro, cartão de crédito ou cartão de débito. Para Pix, combine os dados com a loja pelo WhatsApp. O cardápio não cobra seu cartão nem confirma pagamento online.';
     }
     if (/entrega|endereco|localizacao|delivery|frete|taxa/.test(input)) {
-      return 'Atendemos somente por delivery, com entrega grátis na região de Maringá. Digite rua, número e bairro ou use sua localização, confira o ponto no mapa e confirme. Informe sempre o número da casa. A loja confirma se atende o endereço e o prazo.';
+      return 'Atendemos somente por delivery em Maringá. Consulte a taxa de entrega para seu endereço. Digite rua, número e bairro ou use sua localização, confira o ponto no mapa e confirme. Informe sempre o número da casa. A loja confirma se atende o endereço, a taxa e o prazo.';
     }
     if (/pedido|pedir|sacola|agendar|agendamento|order/.test(input)) {
       return 'Toque em + para escolher os produtos e revise a sacola. Informe o endereço ou confirme sua localização, escolha como deseja pagar e toque em Continuar no WhatsApp. Revise e envie a mensagem; a loja confirma a solicitação. Você não precisa criar uma conta.';
