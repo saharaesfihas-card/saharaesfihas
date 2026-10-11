@@ -64,7 +64,8 @@ class WelcomeMenuTests(unittest.TestCase):
         self.assertEqual(data['mediatype'], 'image')
         self.assertEqual(data['mimetype'], 'image/png')
         self.assertTrue(data['media'].endswith(whatsapp.MENU_IMAGE))
-        self.assertIn('Peça pelo site:', data['caption'])
+        self.assertIn('Peça pelo site ou por aqui, pelo WhatsApp.', data['caption'])
+        self.assertIn('Para pedir por aqui, envie PEDIR', data['caption'])
         self.assertIn(whatsapp.config()['menu'], data['caption'])
         self.assertEqual([r['status'] for r in self.rows('whatsapp_outbox')], ['accepted', 'accepted'])
 

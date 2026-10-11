@@ -21,7 +21,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .core import db, require_admin, utcnow, order_reference
-from . import evolution, whatsapp_ai, whatsapp_checkout, delivery_estimates
+from . import evolution, whatsapp_ai, whatsapp_checkout, delivery_estimates, customer_privacy
 
 router = APIRouter()
 LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo',
@@ -29,7 +29,7 @@ LABELS = {'new': 'recebido', 'confirmed': 'confirmado', 'preparing': 'em preparo
 REQUIRED = ('SAHARA_WHATSAPP_ACCESS_TOKEN', 'SAHARA_WHATSAPP_PHONE_NUMBER_ID',
             'SAHARA_WHATSAPP_APP_SECRET', 'SAHARA_WHATSAPP_VERIFY_TOKEN')
 DELIVERY_RANK = {'accepted': 0, 'sent': 1, 'delivered': 2, 'read': 3, 'failed': 4}
-MENU_IMAGE = '/images/cardapio-panfleto-20261011-abacaxi.png'
+MENU_IMAGE = '/images/cardapio-panfleto-20261011-sem-endereco.png'
 
 
 def config():
@@ -182,6 +182,8 @@ def queue(conn, event, recipient, kind, body, order_id=None, status=None, *, aft
     recipient = evolution.canonical_phone(recipient)
     if not recipient:
         return
+    if kind in ('ai_reply', 'reply', 'welcome', 'menu_image'):
+        body = customer_privacy.safe_reply(conn, body)
     conn.execute('''INSERT OR IGNORE INTO whatsapp_outbox
         (id,event_key,phone,kind,body,order_id,order_status,created_at,updated_at,provider,after_event) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
         (uuid4().hex, event, recipient, kind, body[:4096], order_id, status, utcnow(), utcnow(), config()['provider'], after_event))
@@ -236,6 +238,8 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False, location
         return None
     if location is not None:
         return delivery_estimates.receive(conn, recipient, location)
+    if customer_privacy.store_question(text):
+        return customer_privacy.response()
     delivery_reply = delivery_estimates.handle(conn, recipient, text)
     if delivery_reply is not None:
         return delivery_reply
@@ -299,8 +303,9 @@ def respond_to_inbound(conn, identifier, recipient, text, *, new_conversation=Fa
         if opening:
             queue(conn, welcome_event, recipient, 'welcome', conversational_welcome())
         queue(conn, 'menu-image:' + identifier, recipient, 'menu_image',
-              'Confira nosso cardápio!\n\n🛒 Peça pelo site:\n' + config()['menu']
-              + '\n\nEscolha os produtos, informe a entrega e finalize seu pedido.',
+              'Confira nosso cardápio!\n\n🛒 Peça pelo site ou por aqui, pelo WhatsApp.\n\n'
+              + 'Acesse o site:\n' + config()['menu']
+              + '\n\nPara pedir por aqui, envie PEDIR e escolha seus sabores e quantidades.',
               after_event=welcome_event if opening else '')
         if requested_menu or re.fullmatch(r'(oi|ola|bom dia|boa tarde|boa noite)[\s!.,?]*', normalized):
             return
@@ -562,18 +567,21 @@ def payload(conn, row, cfg):
             return None, 'skipped', 'Avisos não autorizados pelo cliente.'
         if order['status'] != row['order_status']:
             return None, 'skipped', 'Etapa superada. O pedido já avançou para outro estado.'
+    body = row['body']
+    if row['kind'] in ('ai_reply', 'reply', 'welcome', 'menu_image'):
+        body = customer_privacy.safe_reply(conn, body)
     if cfg['provider'] == 'evolution':
         if row['kind'] == 'menu_image':
             return {'number': evolution.canonical_phone(row['phone']), 'mediatype': 'image',
-                    'mimetype': 'image/png', 'caption': row['body'], 'fileName': 'cardapio-sahara.png',
+                    'mimetype': 'image/png', 'caption': body, 'fileName': 'cardapio-sahara.png',
                     'media': cfg['menu'].removesuffix('/index.html') + MENU_IMAGE}, None, None
-        return {'number': evolution.canonical_phone(row['phone']), 'text': row['body'], 'linkPreview': False}, None, None
+        return {'number': evolution.canonical_phone(row['phone']), 'text': body, 'linkPreview': False}, None, None
     base = {'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': evolution.canonical_phone(row['phone'])}
     if contact and contact['last_inbound'] > int(time.time()) - 86400:
         if row['kind'] == 'menu_image':
             return base | {'type': 'image', 'image': {'link': cfg['menu'].removesuffix('/index.html') + MENU_IMAGE,
-                                                  'caption': row['body']}}, None, None
-        return base | {'type': 'text', 'text': {'preview_url': False, 'body': row['body']}}, None, None
+                                                  'caption': body}}, None, None
+        return base | {'type': 'text', 'text': {'preview_url': False, 'body': body}}, None, None
     if row['kind'] == 'order' and cfg['template']:
         return base | {'type': 'template', 'template': {'name': cfg['template'], 'language': {'code': cfg['language']},
                        'components': [{'type': 'body', 'parameters': [{'type': 'text', 'text': order_reference(order)},

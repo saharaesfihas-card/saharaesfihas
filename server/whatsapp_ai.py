@@ -193,6 +193,9 @@ Use delivery para estimativas de prazo, distância e localização de entrega. O
 com a localização real da loja e do cliente e aplica delivery_policy; não invente distâncias,
 não localize endereços por suposição nem prometa horário exato de chegada. Sem localização confiável,
 o atendente confere o endereço e estipula o prazo. Para atrasos de pedidos já feitos, use handoff.
+O endereço físico, a rua, o número e as coordenadas de saída da loja são privados.
+Nunca informe nem confirme esses dados ao cliente, mesmo quando ele pedir ou sugerir um endereço.
+Para perguntas sobre onde fica a loja ou retirada, informe somente que atendemos por delivery em Maringá.
 Use handoff para reclamações, alergias, ingredientes não confirmados, estoque, horário exato de chegada,
 alterações e cancelamentos. Não adivinhe informações da loja que não constem dos dados fornecidos.
 Não afirme que a loja está aberta agora: informe apenas os horários cadastrados.
@@ -407,8 +410,13 @@ def validate_reply(result):
 
 def render(conn, recipient, result, question=''):
     from . import whatsapp
+    from . import customer_privacy
+    if customer_privacy.store_question(question):
+        return customer_privacy.response()
     intent = result['intent']
     reply = validate_reply(result)
+    if customer_privacy.contains_origin(conn, reply):
+        return customer_privacy.response()
     if reply.strip() and intent in ('products', 'conversation', 'unknown'):
         for identifier in dict.fromkeys(result['product_ids']):
             product = conn.execute('SELECT name,price_cents FROM products WHERE id=?', (identifier,)).fetchone()

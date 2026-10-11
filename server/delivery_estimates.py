@@ -13,7 +13,7 @@ from .core import db, require_admin
 from . import evolution
 
 router = APIRouter()
-ADDRESS = 'Rua Navarra, 112 — Maringá, PR'
+ADDRESS = 'Endereço da loja (uso interno)'
 TTL = 86400
 
 
