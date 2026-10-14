@@ -33,6 +33,7 @@ MENU_IMAGE = '/images/cardapio-panfleto-20261011-sem-endereco.png'
 
 
 def config():
+    public_url = os.environ.get('SAHARA_PUBLIC_URL', 'https://sahara-esfihas-pdv.onrender.com').rstrip('/').removesuffix('/index.html')
     values = {key: os.environ.get(key, '').strip() for key in REQUIRED + evolution.REQUIRED}
     version = os.environ.get('SAHARA_WHATSAPP_API_VERSION', 'v25.0').strip()
     values.update(enabled=os.environ.get('SAHARA_WHATSAPP_ENABLED') == '1', version=version,
@@ -40,7 +41,8 @@ def config():
                   template=os.environ.get('SAHARA_WHATSAPP_ORDER_TEMPLATE', '').strip(),
                   language=os.environ.get('SAHARA_WHATSAPP_TEMPLATE_LANGUAGE', 'pt_BR').strip(),
                   SAHARA_EVOLUTION_EXPECTED_NUMBER=os.environ.get('SAHARA_EVOLUTION_EXPECTED_NUMBER', evolution.DEFAULT_NUMBER).strip(),
-                  menu=os.environ.get('SAHARA_PUBLIC_URL', 'https://sahara-esfihas-pdv.onrender.com').rstrip('/') + '/index.html')
+                  public_url=public_url,
+                  menu=(os.environ.get('SAHARA_MENU_URL', '').strip() or public_url).rstrip('/').removesuffix('/index.html'))
     values['welcome_menu'] = os.environ.get('SAHARA_WHATSAPP_WELCOME_MENU', '1') != '0'
     required = evolution.REQUIRED if values['provider'] == 'evolution' else REQUIRED
     valid = evolution.valid_config(values) if values['provider'] == 'evolution' else bool(
@@ -575,6 +577,9 @@ def payload(conn, row, cfg):
         if order['status'] != row['order_status']:
             return None, 'skipped', 'Etapa superada. O pedido já avançou para outro estado.'
     body = row['body']
+    # Keep already queued links readable after adopting the shorter public address.
+    for old_url in {cfg['menu'], cfg['public_url']}:
+        body = re.sub(re.escape(old_url) + r'/index\.html(?=$|[\s?#])', lambda _: cfg['menu'], body)
     if row['kind'] in ('ai_reply', 'reply', 'welcome', 'menu_image'):
         body = customer_privacy.safe_reply(conn, body)
     if cfg['provider'] == 'evolution':

@@ -93,7 +93,7 @@ def api(cfg, path, data=None):
         raise ValueError('Configuração inválida.')
     url = cfg['SAHARA_EVOLUTION_URL'].rstrip('/') + path
     _verify_public_destination(url)
-    public = urlsplit(cfg['menu'])
+    public = urlsplit(cfg.get('public_url', cfg['menu']))
     request = Request(url,
                       data=json.dumps(data).encode() if data is not None else None,
                       headers={'apikey': cfg['SAHARA_EVOLUTION_API_KEY'], 'Content-Type': 'application/json',
@@ -148,7 +148,7 @@ def connect(cfg):
         return {'state': state, 'connected': False, 'qrcode': None}
     # Reaplica mesmo em instâncias existentes e depois de reinícios.
     api(cfg, '/webhook/set/' + instance_path(cfg), {'webhook': {
-        'enabled': True, 'url': cfg['menu'].removesuffix('/index.html') + '/api/whatsapp/evolution/webhook',
+        'enabled': True, 'url': cfg.get('public_url', cfg['menu']).removesuffix('/index.html') + '/api/whatsapp/evolution/webhook',
         'headers': {'X-Sahara-Webhook-Secret': cfg['SAHARA_EVOLUTION_WEBHOOK_SECRET']},
         'byEvents': False, 'base64': False, 'events': EVENTS}})
     if state == 'open':

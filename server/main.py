@@ -17,11 +17,12 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders, delivery_estimates
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
+from .evolution import valid_url as valid_public_url
 
 class Model(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, allow_inf_nan=False)
@@ -363,6 +364,22 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     @app.get('/system-config.js')
     def system_config():
         return Response('window.SaharaSystemConfig = Object.freeze({apiBase:"/api"});', media_type='application/javascript')
+
+    @app.get('/index.html', include_in_schema=False)
+    def short_menu_url(request: Request):
+        cfg = whatsapp.config()
+        target = cfg['menu'] if has_external_menu(cfg) else '/'
+        return RedirectResponse(target + ('?' + request.url.query if request.url.query else ''), status_code=308)
+
+    def has_external_menu(cfg):
+        return cfg['menu'] != cfg['public_url'] and valid_public_url(cfg['menu'])
+
+    @app.get('/', include_in_schema=False)
+    def customer_menu(request: Request):
+        cfg = whatsapp.config()
+        if has_external_menu(cfg):
+            return RedirectResponse(cfg['menu'] + ('?' + request.url.query if request.url.query else ''), status_code=308)
+        return FileResponse(ROOT / 'index.html')
 
     @app.get('/{asset:path}')
     def static_asset(asset: str):

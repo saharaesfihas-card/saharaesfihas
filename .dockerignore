@@ -21,3 +21,4 @@ downloads
 *.p12
 *.idsig
 store-password
+.render-cardapio-public

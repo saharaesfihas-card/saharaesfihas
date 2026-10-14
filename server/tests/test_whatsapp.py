@@ -127,7 +127,8 @@ class WhatsAppTests(unittest.TestCase):
         self.assertNotIn('#' + other['display_number'], self.outbox()[-1]['body'])
         self.assertIn('Não encontrei', self.outbox()[-1]['body'])
         self.webhook(self.message('cardápio'))
-        self.assertIn('/index.html', self.outbox()[-1]['body'])
+        self.assertIn(whatsapp.config()['menu'], self.outbox()[-1]['body'])
+        self.assertNotIn('/index.html', self.outbox()[-1]['body'])
 
     def test_handoff_pauses_bot_and_manual_reply_is_idempotent(self):
         self.webhook(self.message('atendente'))
