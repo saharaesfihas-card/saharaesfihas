@@ -110,8 +110,8 @@ async function run() {
     await submit('Entrar no painel', '/admin/login');
     await page.locator('#workspace:not([hidden])').waitFor();
     assert.equal(await page.locator('#admin-password').inputValue(), '');
-    const storage = await page.evaluate(() => [localStorage.length, sessionStorage.length]);
-    assert.deepEqual(storage, [0, 0]);
+    const storage = await page.evaluate(() => ({ keys: Object.keys(localStorage), sound: localStorage.getItem('sahara-order-sound-enabled'), session: sessionStorage.length }));
+    assert.deepEqual(storage, { keys: ['sahara-order-sound-enabled'], sound: '1', session: 0 });
     csrf = (await api('/admin/session')).csrf_token;
     await api('/admin/cash/sessions', { method: 'POST', data: { action: 'open' }, headers: { 'X-Sahara-CSRF': '' }, status: 403 });
   });

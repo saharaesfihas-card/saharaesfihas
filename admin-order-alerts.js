@@ -1,19 +1,26 @@
 'use strict';
 
-// Only an authenticated, explicitly activated tab may play or print new orders.
+// Only an authenticated tab may monitor orders; browser audio permission remains authoritative.
 window.SaharaOrderAlerts = {
   create({ api, printOrder, onOrders }) {
     const soundButton = document.getElementById('order-sound');
     const printCheckbox = document.getElementById('order-auto-print');
     const status = document.getElementById('order-monitor-status');
     const message = document.getElementById('order-alert-message');
-    let authenticated = false, sound = false, owner = false, busy = false, printFailures = 0;
+    const preferenceKey = 'sahara-order-sound-enabled';
+    let soundWanted = true;
+    try { soundWanted = localStorage.getItem(preferenceKey) !== '0'; } catch { /* Storage can be unavailable. */ }
+    let authenticated = false, sound = false, blocked = false, owner = false, busy = false, printFailures = 0, missedTone = false;
     let context = null, nextTone = 0, cursor = null, timer = null, release = null, generation = 0, starting = null;
 
     function controls(text) {
-      soundButton.textContent = sound ? 'Pausar som' : 'Ativar som de pedidos';
+      soundButton.textContent = sound ? 'Pausar som' : blocked && soundWanted ? 'Liberar som' : 'Ativar som de pedidos';
       soundButton.setAttribute('aria-pressed', String(sound));
-      status.textContent = text || (owner ? `Acompanhando novos pedidos${sound ? ' · som ativo' : ''}${printCheckbox.checked ? ' · impressão ativa' : ''}. Mantenha este PDV aberto.` : 'Ative os avisos nesta aba para acompanhar novos pedidos.');
+      status.textContent = text || (owner ? `Acompanhando novos pedidos${sound ? ' · som ativo' : blocked && soundWanted ? ' · som autorizado: clique em qualquer lugar do PDV para liberar o áudio' : ''}${printCheckbox.checked ? ' · impressão ativa' : ''}. Mantenha este PDV aberto.` : 'Ative os avisos nesta aba para acompanhar novos pedidos.');
+    }
+
+    function savePreference() {
+      try { localStorage.setItem(preferenceKey, soundWanted ? '1' : '0'); } catch { /* Keep the current tab functional. */ }
     }
 
     function closeAudio() {
@@ -21,9 +28,29 @@ window.SaharaOrderAlerts = {
       context = null; nextTone = 0;
     }
 
+    function prepareAudio(preview = false) {
+      if (!authenticated || !owner || !soundWanted) return;
+      const Audio = window.AudioContext || window.webkitAudioContext;
+      if (!Audio) { blocked = true; controls('Este navegador não oferece áudio para os pedidos. Use Chrome ou Edge atualizado.'); return; }
+      if (!context) {
+        try { context = new Audio(); }
+        catch { blocked = true; controls('Não foi possível iniciar o áudio. Confira o som do PC e tente novamente.'); return; }
+      }
+      const current = generation, audio = context;
+      sound = audio.state === 'running'; blocked = !sound; controls();
+      // resume() can stay pending until a gesture. Never let it stop order polling or printing.
+      audio.resume().then(() => {
+        if (current !== generation || audio !== context || !authenticated || !owner || !soundWanted) return;
+        sound = audio.state === 'running'; blocked = !sound; controls();
+        if (sound && (preview || missedTone)) {
+          missedTone = false;
+          tone().catch(() => { if (current === generation) { sound = false; blocked = true; controls(); } });
+        }
+      }).catch(() => { if (current === generation && audio === context) { sound = false; blocked = true; controls(); } });
+    }
+
     async function tone() {
       if (!context) throw new Error('Som indisponível.');
-      await context.resume();
       if (context.state !== 'running') throw new Error('Som bloqueado.');
       const start = Math.max(context.currentTime + 0.03, nextTone);
       // An original short bell pattern, repeated three times for a delivery alert.
@@ -43,7 +70,7 @@ window.SaharaOrderAlerts = {
     }
 
     function stop() {
-      generation++; owner = false; cursor = null;
+      generation++; owner = false; cursor = null; blocked = false; missedTone = false;
       clearTimeout(timer); timer = null;
       if (release) release(); release = null;
       controls();
@@ -69,7 +96,10 @@ window.SaharaOrderAlerts = {
             message.textContent = `Novo pedido #${number} recebido no PDV.`;
             if (sound) {
               try { await tone(); }
-              catch { if (current !== generation) return; sound = false; closeAudio(); controls('O som foi bloqueado. Clique em Ativar som de pedidos para liberar novamente.'); }
+              catch { if (current !== generation) return; sound = false; blocked = true; missedTone = true; closeAudio(); prepareAudio(); }
+            } else if (soundWanted) {
+              missedTone = true;
+              prepareAudio();
             }
             if (printCheckbox.checked && current === generation && authenticated) {
               try { await printOrder(order); }
@@ -81,7 +111,7 @@ window.SaharaOrderAlerts = {
           cursor = data.cursor; more = data.has_more;
           if (received.length) await onOrders(received);
         }
-        if (sound || printCheckbox.checked) controls();
+        if (soundWanted || printCheckbox.checked) controls();
         else stop();
       } catch {
         if (current === generation && authenticated) controls('Sem conexão com o PDV. Tentando novamente; os pedidos serão conferidos ao reconectar.');
@@ -98,13 +128,14 @@ window.SaharaOrderAlerts = {
       if (!navigator.locks) {
         controls('Use o Chrome ou Edge atualizado para ativar os avisos de pedidos.'); return false;
       }
+      clearTimeout(timer);
       const current = ++generation;
       controls('Ativando acompanhamento de novos pedidos…');
       let answer;
       const ready = new Promise(resolve => { answer = resolve; });
       starting = ready.finally(() => { starting = null; });
       navigator.locks.request('sahara-new-order-monitor', { ifAvailable: true }, async lock => {
-        if (!lock) { controls('Os avisos estão ativos em outra aba deste navegador. Use aquela aba ou pause os avisos nela.'); answer(false); return; }
+        if (!lock) { controls('Os avisos estão ativos em outra aba deste navegador. Esta aba assume quando a outra parar.'); retryStart(current); answer(false); return; }
         const held = new Promise(resolve => { release = resolve; });
         try {
           const data = await api('/admin/orders/incoming');
@@ -116,6 +147,7 @@ window.SaharaOrderAlerts = {
           await held;
         } catch {
           if (current === generation && authenticated) controls('Não foi possível ativar os avisos. Confira a conexão e tente novamente.');
+          retryStart(current);
           answer(false);
         } finally {
           if (current === generation) { owner = false; release = null; }
@@ -124,37 +156,59 @@ window.SaharaOrderAlerts = {
       return ready;
     }
 
+    function retryStart(current) {
+      if (current !== generation || !authenticated || !(soundWanted || printCheckbox.checked)) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => start().then(active => { if (active) prepareAudio(); }), 5000);
+    }
+
     soundButton.addEventListener('click', async () => {
       soundButton.disabled = true;
       try {
         if (sound) {
-          sound = false; closeAudio(); if (!printCheckbox.checked) stop(); else controls();
+          soundWanted = false; savePreference(); sound = false; blocked = false; closeAudio(); if (!printCheckbox.checked) stop(); else controls();
         } else {
-          const Audio = window.AudioContext || window.webkitAudioContext;
-          if (!Audio) throw new Error('Este navegador não oferece áudio para os pedidos. Use Chrome ou Edge atualizado.');
-          context = new Audio(); await context.resume();
-          if (context.state !== 'running') throw new Error('Não foi possível liberar o áudio. Confira o som do PC e tente novamente.');
-          sound = true;
-          if (await start()) await tone();
+          soundWanted = true; savePreference();
+          if (await start()) prepareAudio(true);
           else { sound = false; closeAudio(); }
         }
       } catch (error) { sound = false; closeAudio(); if (!printCheckbox.checked) stop(); controls(error.message); }
-      finally { soundButton.disabled = false; soundButton.textContent = sound ? 'Pausar som' : 'Ativar som de pedidos'; soundButton.setAttribute('aria-pressed', String(sound)); }
+      finally { soundButton.disabled = false; soundButton.textContent = sound ? 'Pausar som' : blocked && soundWanted ? 'Liberar som' : 'Ativar som de pedidos'; soundButton.setAttribute('aria-pressed', String(sound)); }
     });
 
     printCheckbox.addEventListener('change', async () => {
       printCheckbox.disabled = true;
       try {
         if (printCheckbox.checked && !await start()) printCheckbox.checked = false;
-        else if (!printCheckbox.checked && !sound) stop(); else controls();
+        else if (!printCheckbox.checked && !soundWanted) stop(); else controls();
       } finally { printCheckbox.disabled = false; }
+    });
+
+    // A normal click or key in the PDV may legitimately unlock audio after a reload.
+    function unlockOnInteraction(event) {
+      if (event.isTrusted && authenticated && owner && soundWanted && !sound && event.target !== soundButton) prepareAudio();
+    }
+    document.addEventListener('pointerdown', unlockOnInteraction);
+    document.addEventListener('keydown', unlockOnInteraction);
+    window.addEventListener('storage', event => {
+      if (event.key !== preferenceKey) return;
+      soundWanted = event.newValue !== '0';
+      if (!soundWanted) {
+        sound = false; blocked = false; closeAudio();
+        if (!printCheckbox.checked) stop(); else controls();
+      } else if (authenticated) start().then(active => { if (active) prepareAudio(); });
     });
 
     return {
       setAuthenticated(value) {
+        const entered = value && !authenticated;
         authenticated = value;
         if (!value) { sound = false; printCheckbox.checked = false; closeAudio(); stop(); message.textContent = ''; }
         controls();
+        if (entered && soundWanted) {
+          savePreference();
+          start().then(active => { if (active) prepareAudio(); });
+        }
       },
       checkNow() { if (owner && !busy) { clearTimeout(timer); return poll(); } },
     };

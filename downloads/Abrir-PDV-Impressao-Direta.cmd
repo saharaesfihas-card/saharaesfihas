@@ -11,5 +11,5 @@ if not defined sahara_chrome (
 )
 echo Abrindo o PDV com impressao direta na impressora padrao.
 echo A comanda ja tem DUAS vias. Configure apenas UMA copia no driver.
-start "" "%sahara_chrome%" --kiosk-printing "--user-data-dir=%LOCALAPPDATA%\SaharaPDV-Impressao" "--app=https://sahara-esfihas-pdv.onrender.com/admin.html"
+start "" "%sahara_chrome%" --kiosk-printing --autoplay-policy=no-user-gesture-required "--user-data-dir=%LOCALAPPDATA%\SaharaPDV-Impressao" "--app=https://sahara-esfihas-pdv.onrender.com/admin.html"
 endlocal

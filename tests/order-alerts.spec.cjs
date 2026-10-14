@@ -61,7 +61,7 @@ async function start() {
     if (backend.exitCode !== null) throw new Error(output);
     try { return (await fetch(base + '/api/health')).ok; } catch { return false; }
   });
-  browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
+  browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--autoplay-policy=user-gesture-required'] });
   context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'block' });
   await context.route('**/*', r => new URL(r.request().url()).origin === base ? r.continue() : r.abort());
   await context.addInitScript(() => {
@@ -76,30 +76,36 @@ async function start() {
     };
     const NativeAudio = window.AudioContext;
     window.AudioContext = class extends NativeAudio {
+      // Simulate an autoplay policy that leaves resume pending until a trusted gesture.
+      get state() { return window.__forceAudioBlocked && !window.__allowAudio ? 'suspended' : super.state; }
+      resume() { return window.__forceAudioBlocked && !window.__allowAudio ? new Promise(() => {}) : super.resume(); }
       createOscillator() {
         const node = super.createOscillator(), nativeStart = node.start.bind(node);
         node.start = when => { window.__notes.push({ when, frequency: node.frequency.value }); nativeStart(when); };
         return node;
       }
     };
+    for (const event of ['pointerdown', 'keydown']) document.addEventListener(event, e => { if (e.isTrusted) window.__allowAudio = true; }, true);
     window.print = () => { window.__receipts.push(document.getElementById('print-target').textContent); };
   });
   page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
   await page.clock.install();
   await page.goto(base + '/admin.html');
+  await order(); // Existing order before login must never be announced retroactively.
   await page.locator('#admin-password').fill(password);
   await page.getByRole('button', { name: 'Entrar no painel', exact: true }).click();
   await page.locator('#workspace:not([hidden])').waitFor();
   csrf = (await api('/admin/session')).csrf_token;
+  await waitFor(async () => (await page.locator('#order-monitor-status').innerText()).includes('Acompanhando novos pedidos'));
+  await waitFor(async () => await page.locator('#order-sound').getAttribute('aria-pressed') === 'true');
 }
 
 async function run() {
   await start();
-  await check('First activation previews the real audio graph and ignores historical orders', async () => {
-    await order();
+  await check('Login restores the authorized sound automatically without announcing historical orders', async () => {
     assert.equal(await page.locator('#order-auto-print').isChecked(), false);
-    await page.locator('#order-sound').click();
-    await waitFor(async () => (await totals()).notes === 12);
+    assert.equal(await page.evaluate(() => localStorage.getItem('sahara-order-sound-enabled')), '1');
+    assert.equal((await totals()).notes, 0);
     await page.locator('#order-auto-print').check();
     await tick();
     assert.equal((await totals()).prints, 0);
@@ -194,6 +200,50 @@ async function run() {
     await order(); await tick();
     await waitFor(async () => (await page.locator('#order-alert-message').innerText()).includes('não abriram'));
     const before = await totals(); await tick(); assert.equal((await totals()).prints, before.prints);
+  });
+  await check('An explicit sound pause survives reload and can be authorized again', async () => {
+    // Sound is already paused by the mute test; automatic printing is not persisted.
+    assert.equal(await page.evaluate(() => localStorage.getItem('sahara-order-sound-enabled')), '0');
+    await page.reload(); await page.locator('#workspace:not([hidden])').waitFor();
+    await page.clock.runFor(10000);
+    assert.equal((await totals()).feeds, 0); assert.equal((await totals()).notes, 0);
+    assert.equal(await page.locator('#order-auto-print').isChecked(), false);
+    await page.locator('#order-sound').click();
+    await waitFor(async () => (await totals()).notes === 12);
+    assert.equal(await page.evaluate(() => localStorage.getItem('sahara-order-sound-enabled')), '1');
+  });
+  await check('Reload keeps monitoring when autoplay is blocked and a normal PDV click unlocks sound', async () => {
+    await page.addInitScript(() => { window.__forceAudioBlocked = true; window.__allowAudio = false; });
+    await page.reload(); await page.locator('#workspace:not([hidden])').waitFor();
+    await waitFor(async () => (await page.locator('#order-monitor-status').innerText()).includes('som autorizado'));
+    assert.equal(await page.locator('#order-sound').innerText(), 'Liberar som');
+    // Exercise a blocked audio resume alongside printing without granting a browser gesture.
+    await page.evaluate(() => {
+      const checkbox = document.getElementById('order-auto-print');
+      checkbox.checked = true; checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const before = await totals(); await order(); await tick();
+    await waitFor(async () => (await totals()).prints === before.prints + 1);
+    assert.equal((await totals()).notes, 0);
+    await page.locator('#new-order').click();
+    await waitFor(async () => await page.locator('#order-sound').getAttribute('aria-pressed') === 'true');
+    await waitFor(async () => (await totals()).notes === 12);
+    assert.match(await page.locator('#order-monitor-status').innerText(), /som ativo/);
+  });
+  await check('A standby tab takes over automatically when the active tab closes', async () => {
+    const next = await context.newPage(); next.on('pageerror', e => errors.push(e.message));
+    await next.clock.install(); await next.goto(base + '/admin.html');
+    await next.locator('#workspace:not([hidden])').waitFor();
+    await waitFor(async () => (await next.locator('#order-monitor-status').innerText()).includes('outra aba'));
+    await page.close(); page = next;
+    await page.clock.runFor(6000);
+    await waitFor(async () => (await page.locator('#order-monitor-status').innerText()).includes('Acompanhando novos pedidos'));
+    await page.locator('#new-order').click();
+    await waitFor(async () => await page.locator('#order-sound').getAttribute('aria-pressed') === 'true');
+    await page.locator('#order-auto-print').check();
+    const before = await totals(); await order(); await tick();
+    await waitFor(async () => (await totals()).prints === before.prints + 1);
+    assert.equal((await totals()).notes, before.notes + 12);
   });
   await check('Logout cancels in-flight arrivals and releases the tab lock', async () => {
     const newOrder = await order();
