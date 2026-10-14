@@ -698,6 +698,14 @@ tbody tr:last-child td { border-bottom: 0; }
 .danger-text { color: var(--danger); }
 .loading { padding: 30px 0; color: var(--muted); }
 #print-target { display: none; }
+.order-alerts { margin: 0 0 22px; padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.order-alert-controls, .order-alert-received { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.order-alert-controls label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.order-alert-controls input { width: 18px; height: 18px; accent-color: var(--wine); flex-shrink: 0; }
+.order-alerts p { margin: 10px 0 0; }
+.order-alerts .help { font-size: 12px; color: var(--muted); }
+.order-alert-received:has(#order-alert-message:empty) { display: none; }
+.order-alert-received p { color: var(--wine); font-weight: 700; }
 .receipt-line { display: flex; justify-content: space-between; gap: 20px; }
 
 @media (max-width: 1180px) {
@@ -795,6 +803,7 @@ tbody tr:last-child td { border-bottom: 0; }
   #print-target hr { border: 0; border-top: 1px dashed #000; }
   #print-target p { margin: 7px 0; }
   #print-target ul { padding-left: 18px; }
+  #print-target .receipt-copy + .receipt-copy { break-before: page; page-break-before: always; }
   @page { margin: 8mm; }
 }
 

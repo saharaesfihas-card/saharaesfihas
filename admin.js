@@ -45,6 +45,24 @@
   const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0;
   const cents = value => Math.round(numeric(value) * 100);
   const list = (data, key) => Array.isArray(data?.[key]) ? data[key] : [];
+  const orderAlerts = window.SaharaOrderAlerts.create({ api, printOrder, onOrders: async () => {
+    if (state.view === 'orders' && $('screen').getAttribute('aria-busy') !== 'true'
+        && !$('screen').contains(document.activeElement) && !$('screen').querySelector('details[open]')) await renderView();
+  } });
+  function fitPosToViewport() {
+    const customer = document.querySelector('.pos-customer');
+    if (!customer) return;
+    if (!window.matchMedia('(min-width: 1181px) and (min-height: 651px)').matches) {
+      customer.style.removeProperty('max-height'); return;
+    }
+    const top = Math.max(96, customer.getBoundingClientRect().top);
+    customer.style.maxHeight = `${Math.max(160, window.innerHeight - top - 24)}px`;
+  }
+  const posSizing = new ResizeObserver(fitPosToViewport);
+  posSizing.observe(document.querySelector('.order-alerts'));
+  posSizing.observe(document.querySelector('.page-heading'));
+  window.addEventListener('resize', fitPosToViewport);
+  window.addEventListener('scroll', fitPosToViewport, { passive: true });
 
   function el(tag, text, className) {
     const node = document.createElement(tag);
@@ -120,6 +138,7 @@
   }
 
   function setAccess(mode) {
+    orderAlerts.setAuthenticated(mode === 'workspace');
     $('activation').hidden = mode !== 'activation';
     $('login-panel').hidden = mode !== 'login';
     $('workspace').hidden = mode !== 'workspace';
@@ -421,7 +440,8 @@
   }
 
   function printOrder(order) {
-    const target = $('print-target'); target.replaceChildren();
+    const target = el('section', undefined, 'receipt-copy');
+    $('print-target').replaceChildren(target);
     const ifood = order.delivery?.ifood;
     target.append(el('h1', 'SAHARA ESFIHAS'), el('p', 'Somente delivery · (44) 99174-8318'), el('hr'), el('h2', `Pedido #${orderNumber(order)}`), el('p', date(order.created_at)));
     if (order.requested_for) target.append(el('p', `Agendado: ${date(order.requested_for)}`));
@@ -436,7 +456,8 @@
     if (order.notes) target.append(el('p', `Observação: ${order.notes}`));
     if (order.discount_cents) target.append(el('p', `Desconto: ${money(order.discount_cents)}`));
     target.append(el('hr'), el('strong', `TOTAL ${money(order.total_cents)}`), el('p', `${order.payment_method} · ${paymentLabel(order)}`));
-    window.print();
+    $('print-target').append(target.cloneNode(true));
+    return window.print();
   }
 
   async function loadMenu(screen) {
@@ -485,6 +506,7 @@
       idempotencyKey = crypto.randomUUID();
       showNotice('Pedido registrado. Acompanhe a preparação em Pedidos e cozinha.');
       state.view = 'orders'; state.orderFilter = 'active'; state.orderQuery = ''; await renderView();
+      orderAlerts.checkNow();
       window.scrollTo({ top: 0, behavior: 'instant' });
     }, 'O pagamento recebido é registrado na tela de pedidos.');
     grid.className = 'pos-layout';
@@ -1032,7 +1054,7 @@
     const fragment = document.createDocumentFragment();
     try {
       await loaders[view](fragment);
-      if (generation === state.generation && state.csrf) $('screen').replaceChildren(fragment);
+      if (generation === state.generation && state.csrf) { $('screen').replaceChildren(fragment); fitPosToViewport(); }
     } catch (error) {
       if (generation === state.generation) { const p = panel('Não foi possível carregar os dados'); p.append(el('p', error.message, 'danger-text'), button('Tentar novamente', renderView)); $('screen').replaceChildren(p); }
     } finally { if (generation === state.generation) $('screen').setAttribute('aria-busy', 'false'); }
@@ -1049,6 +1071,7 @@
   }
 
   $('new-order').addEventListener('click', () => navigate('pos'));
+  $('order-alert-view').addEventListener('click', () => navigate('orders'));
   $('menu-toggle').addEventListener('click', () => document.body.classList.contains('sidebar-open') ? closeMenu() : openMenu());
   $('menu-close').addEventListener('click', () => closeMenu());
   $('sidebar-overlay').addEventListener('click', () => closeMenu());

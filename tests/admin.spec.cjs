@@ -299,6 +299,8 @@ async function run() {
     assert.equal((await api('/admin/inventory')).items.find(row => row.id === flour.id).on_hand, 980);
     await page.getByRole('button', { name: 'Imprimir comanda', exact: true }).click();
     assert.equal(await page.evaluate(() => window.__printCalls), 1); assert.match(await page.locator('#print-target').textContent(), /Cliente teste/); assert.match(await page.locator('#print-target').textContent(), new RegExp(`#${order.display_number}`));
+    const copies = await page.locator('#print-target .receipt-copy').allTextContents();
+    assert.equal(copies.length, 2); assert.equal(copies[0], copies[1]);
     const driver = (await api('/admin/drivers')).drivers[0];
     await page.getByRole('combobox', { name: `Entregador do pedido ${order.display_number}`, exact: true }).selectOption(driver.id);
     const assignment = await submit('Atribuir entrega', `/admin/orders/${order.id}/driver`, 'PATCH');

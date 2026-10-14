@@ -14,7 +14,7 @@ from typing import Literal
 import uuid
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -273,6 +273,17 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
                     'status': row['status'], 'payment_status': row['payment_status'],
                     'total_cents': row['total_cents'], 'requested_for': row['requested_for'], 'items': json.loads(row['items_json'])}
 
+    @app.get('/api/admin/orders/incoming')
+    def incoming_orders(request: Request, cursor: int | None = Query(default=None, ge=0, le=9223372036854775807), admin=Depends(require_admin)):
+        with db(request) as conn:
+            if cursor is None:
+                latest = conn.execute('SELECT COALESCE(MAX(rowid),0) FROM orders').fetchone()[0]
+                return {'cursor': latest, 'orders': [], 'has_more': False}
+            rows = conn.execute('SELECT rowid AS arrival_cursor,* FROM orders WHERE rowid>? ORDER BY rowid LIMIT 51', (cursor,)).fetchall()
+            batch = rows[:50]
+            return {'cursor': batch[-1]['arrival_cursor'] if batch else cursor,
+                    'orders': [order_dict(row) for row in batch], 'has_more': len(rows) > 50}
+
     @app.get('/api/admin/orders')
     def orders(request: Request, status: str | None = None, admin=Depends(require_admin)):
         with db(request) as conn:
@@ -357,7 +368,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     def static_asset(asset: str):
         asset = asset or 'index.html'
         public = {'index.html', 'app.js', 'catalog-live.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'style.css', 'pwa.js', 'pwa.css',
-                  'service-worker.js', 'manifest.webmanifest', 'admin.html', 'admin.css', 'admin.js', 'esfihas.png', 'logo-sahara.jpg'}
+                  'service-worker.js', 'manifest.webmanifest', 'admin.html', 'admin.css', 'admin.js', 'admin-order-alerts.js', 'esfihas.png', 'logo-sahara.jpg'}
         allowed_image = asset.startswith(('images/', 'icons/')) and Path(asset).suffix.lower() in ('.png', '.jpg', '.jpeg', '.svg', '.ico')
         if asset not in public and not allowed_image:
             raise HTTPException(404, 'Arquivo não encontrado.')
