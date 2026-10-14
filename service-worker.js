@@ -1,8 +1,8 @@
 'use strict';
-const CACHE = 'sahara-pwa-20261011-taxas-entrega-v1';
+const CACHE = 'sahara-pwa-20261014-cardapio-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
-  'index.html', 'style.css', 'app.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
+  'index.html', 'style.css', 'app.js', 'catalog-live.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
   'logo-sahara.jpg', 'esfihas.png',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
   'images/atum.jpg', 'images/carne-seca.jpg', 'images/carne-seca-cream-cheese.jpg',

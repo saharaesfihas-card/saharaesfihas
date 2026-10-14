@@ -187,6 +187,9 @@ def change_items(conn, cart, changes):
                 raise ValueError('Esse produto não está no carrinho. Envie CARRINHO para conferir.')
             items.pop(identifier)
         else:
+            product = conn.execute('SELECT name,available FROM products WHERE id=?', (identifier,)).fetchone()
+            if not product['available']:
+                raise ValueError(f"{product['name']} está indisponível no momento. Escolha outro produto.")
             items[identifier] = quantity + items.get(identifier, 0) if action == 'add' else quantity
             if items[identifier] > 99:
                 raise ValueError('O limite é de 99 unidades por produto. Envie AJUSTAR com a quantidade desejada.')

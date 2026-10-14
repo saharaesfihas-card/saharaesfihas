@@ -23,15 +23,17 @@ for(const group of groups){
   }
 }
 const catalog=groups.flatMap(g=>g.items.map(([id,name,description,price])=>({id,name,description,category:g.title,priceCents:Math.round(Number((price||g.price||(id==='shawarma-frango'?'R$ 19,99':'R$ 24,99')).replace('R$','').trim().replace(',','.'))*100)})));const cart=new Map();
+let catalogReady = !Boolean(window.SaharaSystemConfig?.apiBase);
 const money=cents=>(cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 try{const saved=JSON.parse(localStorage.getItem('sahara-cart')||'[]');for(const [id,q] of saved){if(catalog.some(p=>p.id===id)&&Number.isInteger(q)&&q>0&&q<=99)cart.set(id,q);}}catch{}
 
 document.querySelector('#products').innerHTML=groups.map((g,i)=>`<section class="category"><div class="category-title"><span>0${i+1}</span><h3>${g.title}</h3></div>${g.items.map(([id,name,description,price])=>`<article class="product${productPhotos[id]?' has-photo':''}">${productPhoto(id,name)}<div class="product-info"><h4>${name}</h4><p>${description}</p><span class="price">${price||g.price||(id==='shawarma-frango'?'R$ 19,99':'R$ 24,99')}</span></div><div class="quantity product-quantity" role="group" aria-label="Quantidade de ${name} — ${g.title}"><button type="button" data-change="${id}" data-delta="-1" aria-label="Diminuir ${name} — ${g.title}" disabled>−</button><output data-quantity="${id}" aria-label="Quantidade de ${name}">0</output><button type="button" data-change="${id}" data-delta="1" aria-label="Adicionar ${name} — ${g.title}">+</button></div></article>`).join('')}</section>`).join('');
-function change(id,delta){if(!catalog.some(p=>p.id===id)||!Number.isInteger(delta))throw new Error('Produto ou quantidade inválidos.');const q=(cart.get(id)||0)+delta;if(q>99)throw new Error('Limite de 99 unidades por produto.');if(q<=0)cart.delete(id);else cart.set(id,q);render();}
+function change(id,delta){if(!catalogReady)throw new Error('Aguarde a atualização do cardápio.');if(delta>0&&catalog.find(p=>p.id===id)?.available===false)throw new Error('Este produto está indisponível.');if(!catalog.some(p=>p.id===id)||!Number.isInteger(delta))throw new Error('Produto ou quantidade inválidos.');const q=(cart.get(id)||0)+delta;if(q>99)throw new Error('Limite de 99 unidades por produto.');if(q<=0)cart.delete(id);else cart.set(id,q);render();}
 function snapshot(){return [...cart].map(([id,quantity])=>({id,name:catalog.find(p=>p.id===id).name,priceCents:catalog.find(p=>p.id===id).priceCents,quantity}));}
-function render(){for(const product of catalog){const quantity=cart.get(product.id)||0;const output=document.querySelector('[data-quantity="'+product.id+'"]');output.value=String(quantity);const controls=output.parentElement;controls.querySelector('[data-delta="-1"]').disabled=quantity===0;controls.querySelector('[data-delta="1"]').disabled=quantity===99;controls.classList.toggle('has-items',quantity>0);}const rows=snapshot();const count=rows.reduce((s,x)=>s+x.quantity,0);const total=rows.reduce((s,x)=>s+x.quantity*x.priceCents,0);document.querySelector('#order-total').textContent=money(total);document.querySelector('#quick-order').hidden=count===0;document.querySelector('#quick-order').textContent=`Ver pedido · ${count} ${count===1?'item':'itens'} · ${money(total)}`;try{localStorage.setItem('sahara-cart',JSON.stringify([...cart]));}catch{}document.querySelector('#count').textContent=count;document.querySelector('#checkout').disabled=count===0;document.querySelector('#bag-items').innerHTML=rows.length?rows.map(p=>`<div class="cart-row"><strong>${p.name}</strong><span class="cart-line-total">${money(p.quantity*p.priceCents)}</span><div class="quantity"><button data-change="${p.id}" data-delta="-1" aria-label="Remover uma unidade de ${p.name}">−</button><span aria-label="Quantidade">${p.quantity}</span><button data-change="${p.id}" data-delta="1" ${p.quantity>=99?'disabled':''} aria-label="Adicionar uma unidade de ${p.name}">+</button></div></div>`).join(''):'<div class="empty">Seu pedido começa por aqui.<br>Toque no + ao lado de um sabor.</div>';document.querySelector('#announcement').textContent=`${count} itens no pedido.`;}
+function render(){document.querySelector('#products').hidden=!catalogReady;for(const product of catalog){const quantity=cart.get(product.id)||0;const output=document.querySelector('[data-quantity="'+product.id+'"]');output.value=String(quantity);output.closest('.product').hidden=product.available===false;output.closest('.product').querySelector('.price').textContent=money(product.priceCents);const controls=output.parentElement;controls.querySelector('[data-delta="-1"]').disabled=quantity===0;controls.querySelector('[data-delta="1"]').disabled=!catalogReady||product.available===false||quantity===99;controls.classList.toggle('has-items',quantity>0);}const rows=snapshot();const count=rows.reduce((s,x)=>s+x.quantity,0);const total=rows.reduce((s,x)=>s+x.quantity*x.priceCents,0);document.querySelector('#order-total').textContent=money(total);document.querySelector('#quick-order').hidden=count===0;document.querySelector('#quick-order').textContent=`Ver pedido · ${count} ${count===1?'item':'itens'} · ${money(total)}`;try{localStorage.setItem('sahara-cart',JSON.stringify([...cart]));}catch{}document.querySelector('#count').textContent=count;document.querySelector('#checkout').disabled=!catalogReady||count===0;document.querySelector('#bag-items').innerHTML=rows.length?rows.map(p=>`<div class="cart-row"><strong>${p.name}</strong><span class="cart-line-total">${money(p.quantity*p.priceCents)}</span><div class="quantity"><button data-change="${p.id}" data-delta="-1" aria-label="Remover uma unidade de ${p.name}">−</button><span aria-label="Quantidade">${p.quantity}</span><button data-change="${p.id}" data-delta="1" ${p.quantity>=99?'disabled':''} aria-label="Adicionar uma unidade de ${p.name}">+</button></div></div>`).join(''):'<div class="empty">Seu pedido começa por aqui.<br>Toque no + ao lado de um sabor.</div>';document.querySelector('#announcement').textContent=`${count} itens no pedido.`;}
 document.addEventListener('click',e=>{const add=e.target.closest('[data-add]');const edit=e.target.closest('[data-change]');try{if(add)change(add.dataset.add,1);if(edit)change(edit.dataset.change,Number(edit.dataset.delta));}catch(error){document.querySelector('#announcement').textContent=error.message;}});
 function prepareCheckout() {
+  if (!catalogReady) { document.querySelector('#announcement').textContent = 'Aguarde a atualização do cardápio.'; return null; }
   const rows = snapshot();
   if (!rows.length) return null;
   const form = document.querySelector('#delivery-form');
@@ -95,7 +97,27 @@ function openWhatsApp(message) {
 }
 window.saharaCheckout = {
   prepare: prepareCheckout, message: checkoutMessage, openWhatsApp, money,
-  catalog: () => catalog.map(product => ({ ...product })),
+  catalog: () => catalogReady ? catalog.filter(product => product.available !== false).map(product => ({ ...product })) : [],
+  ready: () => catalogReady,
+  applyCatalog(products) {
+    const active = new Map(products.map(product => [product.id, product]));
+    const removed = [];
+    for (const product of catalog) {
+      const current = active.get(product.id);
+      product.available = Boolean(current && current.available !== false);
+      if (!product.available && cart.has(product.id)) { removed.push(product.name); cart.delete(product.id); }
+      if (current) product.priceCents = current.price_cents;
+    }
+    catalogReady = true; render();
+    for (const section of document.querySelectorAll('#products .category')) {
+      section.hidden = !section.querySelector('.product:not([hidden])');
+      const link = document.querySelector(`.category-link[href="#${section.id}"]`);
+      if (link) link.hidden = section.hidden;
+    }
+    window.dispatchEvent(new Event('resize'));
+    window.dispatchEvent(new CustomEvent('sahara:catalog-updated'));
+    return removed;
+  },
   snapshot: () => snapshot(),
 };
 document.querySelector('#checkout').addEventListener('click', () => {
@@ -107,7 +129,7 @@ document.querySelector('#checkout').addEventListener('click', () => {
   if (prepared) openWhatsApp(prepared.message);
 });
 render();
-if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContext.registerTool({name:'stage_sahara_order',title:'Montar pedido Sahara',description:'Substitui a seleção visível de produtos. Não envia o pedido. O cliente pode revisar e abrir o WhatsApp.',inputSchema:{type:'object',properties:{items:{type:'array',items:{type:'object',properties:{id:{type:'string',enum:catalog.map(p=>p.id)},quantity:{type:'integer',minimum:1,maximum:99}},required:['id','quantity'],additionalProperties:false}}},required:['items'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute(input){if(!input||!Array.isArray(input.items)||input.items.length>catalog.length)throw new Error('Lista inválida.');const staged=new Map();for(const item of input.items){if(!catalog.some(p=>p.id===item.id)||!Number.isInteger(item.quantity)||item.quantity<1||item.quantity>99||staged.has(item.id))throw new Error('Item inválido ou duplicado.');staged.set(item.id,item.quantity);}cart.clear();for(const [id,q] of staged)cart.set(id,q);render();return {items:snapshot(),sent:false};}})).catch(()=>{});}catch{}}
+if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContext.registerTool({name:'stage_sahara_order',title:'Montar pedido Sahara',description:'Substitui a seleção visível de produtos. Não envia o pedido. O cliente pode revisar e abrir o WhatsApp.',inputSchema:{type:'object',properties:{items:{type:'array',items:{type:'object',properties:{id:{type:'string',enum:catalog.map(p=>p.id)},quantity:{type:'integer',minimum:1,maximum:99}},required:['id','quantity'],additionalProperties:false}}},required:['items'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute(input){if(!catalogReady)throw new Error('Aguarde a atualização do cardápio.');if(!input||!Array.isArray(input.items)||input.items.length>catalog.length)throw new Error('Lista inválida.');const staged=new Map();for(const item of input.items){if(!catalog.some(p=>p.id===item.id&&p.available!==false)||!Number.isInteger(item.quantity)||item.quantity<1||item.quantity>99||staged.has(item.id))throw new Error('Item inválido ou duplicado.');staged.set(item.id,item.quantity);}cart.clear();for(const [id,q] of staged)cart.set(id,q);render();return {items:snapshot(),sent:false};}})).catch(()=>{});}catch{}}
 
 
 const deliveryForm=document.querySelector('#delivery-form');

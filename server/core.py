@@ -18,7 +18,8 @@ COOKIE = 'sahara_session'
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS products (
- id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, price_cents INTEGER NOT NULL CHECK(price_cents>=0)
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, price_cents INTEGER NOT NULL CHECK(price_cents>=0),
+ available INTEGER NOT NULL DEFAULT 1 CHECK(available IN (0,1))
 );
 CREATE TABLE IF NOT EXISTS customers (
  id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', phone TEXT UNIQUE,

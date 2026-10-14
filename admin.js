@@ -10,6 +10,7 @@
   const views = {
     orders: ['Pedidos e cozinha', 'Acompanhe os pedidos de delivery, prepare as comandas e organize a entrega.'],
     pos: ['Novo pedido · PDV', 'Registre um pedido recebido por telefone ou WhatsApp usando os preços do cardápio.'],
+    menu: ['Cardápio', 'Pause os itens indisponíveis e ative novamente quando o produto voltar.'],
     dashboard: ['Resultados', 'Acompanhe os pedidos e as vendas com pagamento recebido.'],
     inventory: ['Estoque', 'Registre insumos e entradas ou saídas para acompanhar a disponibilidade.'],
     cash: ['Caixa', 'Abra e feche o caixa e registre suas movimentações financeiras.'],
@@ -23,7 +24,7 @@
     integrations: ['Integrações', 'Confira quais serviços estão disponíveis e o que falta para ativá-los.']
   };
   const navGroups = [
-    ['Operação', [['orders', 'Pedidos e cozinha', 'receipt'], ['pos', 'Novo pedido · PDV', 'cart3'], ['drivers', 'Entregadores', 'scooter']]],
+    ['Operação', [['orders', 'Pedidos e cozinha', 'receipt'], ['pos', 'Novo pedido · PDV', 'cart3'], ['menu', 'Cardápio', 'cart3'], ['drivers', 'Entregadores', 'scooter']]],
     ['Gestão', [['dashboard', 'Resultados', 'bar-chart-line'], ['inventory', 'Estoque', 'boxes'], ['cash', 'Caixa', 'cash-stack'], ['receivables', 'Fiado', 'wallet2']]],
     ['Relacionamento', [['customers', 'Clientes e RFV', 'people'], ['coupons', 'Cupons', 'ticket-perforated'], ['loyalty', 'Fidelidade', 'star'], ['campaigns', 'Campanhas', 'megaphone'], ['reviews', 'Avaliações', 'chat-square-text']]],
     ['Configurações', [['integrations', 'Integrações', 'plug']]]
@@ -438,9 +439,39 @@
     window.print();
   }
 
+  async function loadMenu(screen) {
+    const data = await api('/admin/products');
+    const products = list(data, 'products');
+    const p = panel('Disponibilidade dos produtos', 'Itens pausados ficam ocultos para os clientes e não podem entrar em novos pedidos. Páginas abertas atualizam automaticamente em até 3 segundos.');
+    const search = el('input'); search.type = 'search'; search.placeholder = 'Buscar produto'; search.setAttribute('aria-label', 'Buscar produto no cardápio');
+    const categories = [...new Set(products.map(row => row.category))];
+    const category = selection('Categoria do cardápio', [['', 'Todas as categorias'], ...categories.map(value => [value, value])]);
+    const status = selection('Disponibilidade do cardápio', [['all', 'Todos os itens'], ['active', 'Ativos'], ['paused', 'Pausados']]);
+    const tools = el('div', undefined, 'product-search'); tools.append(search, category, status); p.append(tools);
+    const result = el('div'); p.append(result);
+    const count = el('p', '', 'help'); count.setAttribute('role', 'status'); p.append(count);
+    function filter() {
+      const visible = products.filter(row => normalize(row.name).includes(normalize(search.value)) && (!category.value || row.category === category.value) &&
+        (status.value === 'all' || (status.value === 'active' ? row.available : !row.available)));
+      count.textContent = `${products.filter(row => row.available).length} ativos · ${products.filter(row => !row.available).length} pausados`;
+      result.replaceChildren(table('Produtos do cardápio', [['Produto', row => row.name], ['Categoria', row => row.category], ['Preço', row => money(row.price_cents)],
+        ['Situação', row => badge(row.available ? 'Ativo' : 'Pausado', row.available ? 'success' : 'warning')], ['Ação', row => {
+          const control = button(row.available ? 'Pausar item' : 'Ativar item', async () => {
+            const response = await api(`/admin/products/${encodeURIComponent(row.id)}/availability`, { method: 'PATCH', body: { available: !row.available } });
+            row.available = response.product.available;
+            showNotice(`${row.name}: ${row.available ? 'ativado e disponível no cardápio' : 'pausado e oculto para os clientes'}.`);
+            filter();
+          });
+          control.setAttribute('aria-label', `${row.available ? 'Pausar' : 'Ativar'} ${row.name}`); return control;
+        }]], visible, 'Nenhum produto encontrado com esses filtros.'));
+    }
+    search.addEventListener('input', filter); category.addEventListener('change', filter); status.addEventListener('change', filter);
+    filter(); screen.append(p);
+  }
+
   async function loadPos(screen) {
     const data = await api('/catalog'); state.catalog = list(data, 'products');
-    if (!state.catalog.length) { screen.append(emptyState('Cardápio indisponível', 'Verifique o cadastro de produtos antes de registrar pedidos.')); return; }
+    if (!state.catalog.length) { screen.append(emptyState('Nenhum produto ativo', 'Ative os produtos na seção Cardápio antes de registrar novos pedidos.')); return; }
     const quantityInputs = [];
     let idempotencyKey = crypto.randomUUID(); let orderFingerprint = '';
     const { form, grid } = createForm('Registrar pedido', async data => {
@@ -550,7 +581,7 @@
   }
 
   async function loadInventory(screen) {
-    const [data, catalog, recipeData] = await Promise.all([api('/admin/inventory'), api('/catalog'), api('/admin/recipes')]);
+    const [data, catalog, recipeData] = await Promise.all([api('/admin/inventory'), api('/admin/products'), api('/admin/recipes')]);
     const items = list(data, 'items');
     const p = panel('Itens em estoque', 'Use uma quantidade negativa para registrar saída e positiva para entrada. Informe sempre o motivo.');
     p.append(table('Estoque', [['Insumo', row => row.label], ['Quantidade', row => `${row.on_hand} ${row.unit}`], ['Limite mínimo', row => row.low_threshold], ['Situação', row => badge(numeric(row.on_hand) <= numeric(row.low_threshold) ? 'Repor estoque' : 'Disponível', numeric(row.on_hand) <= numeric(row.low_threshold) ? 'warning' : 'success')]], items));
@@ -983,7 +1014,7 @@
     catch { return false; }
   }
 
-  const loaders = { orders: loadOrders, pos: loadPos, dashboard: loadDashboard, inventory: loadInventory, cash: loadCash, receivables: loadReceivables, customers: loadCustomers, coupons: loadCoupons, loyalty: loadLoyalty, campaigns: loadCampaigns, drivers: loadDrivers, reviews: loadReviews, integrations: loadIntegrations };
+  const loaders = { orders: loadOrders, pos: loadPos, menu: loadMenu, dashboard: loadDashboard, inventory: loadInventory, cash: loadCash, receivables: loadReceivables, customers: loadCustomers, coupons: loadCoupons, loyalty: loadLoyalty, campaigns: loadCampaigns, drivers: loadDrivers, reviews: loadReviews, integrations: loadIntegrations };
 
   async function renderView() {
     if (!state.csrf) return;

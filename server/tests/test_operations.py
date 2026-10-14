@@ -62,7 +62,7 @@ class OperationsTests(unittest.TestCase):
     def product(self):
         identifier = "test-" + str(uuid.uuid4())
         with self.connection() as conn:
-            conn.execute("INSERT INTO products VALUES (?,?,?,?)", (identifier, "Esfiha de teste", "Teste", 400))
+            conn.execute("INSERT INTO products(id,name,category,price_cents) VALUES (?,?,?,?)", (identifier, "Esfiha de teste", "Teste", 400))
         return identifier
 
     def inventory(self, label, quantity, product_id=None):

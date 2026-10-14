@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders, delivery_estimates
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
@@ -77,6 +77,9 @@ class OrderInput(Model):
     coupon_code: str | None = Field(default=None, max_length=40)
     idempotency_key: str = Field(min_length=16, max_length=128)
 
+class AvailabilityInput(Model):
+    available: StrictBool
+
 class StatusInput(Model):
     status: Literal['confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']
 
@@ -133,6 +136,8 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
         conn.executescript(core.SCHEMA)
+        if 'available' not in {row[1] for row in conn.execute('PRAGMA table_info(products)')}:
+            conn.execute('ALTER TABLE products ADD COLUMN available INTEGER NOT NULL DEFAULT 1 CHECK(available IN (0,1))')
         core.initialize_order_numbers(conn)
         operations.initialize(conn)
         marketing.initialize(conn)
@@ -175,7 +180,20 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     @app.get('/api/catalog')
     def products(request: Request):
         with db(request) as conn:
-            return {'products': [dict(row) for row in conn.execute('SELECT * FROM products ORDER BY category,name')]}
+            return {'products': [dict(row) | {'available': bool(row['available'])} for row in conn.execute('SELECT * FROM products WHERE available=1 ORDER BY category,name')]}
+
+    @app.get('/api/admin/products')
+    def admin_products(request: Request, admin=Depends(require_admin)):
+        with db(request) as conn:
+            return {'products': [dict(row) | {'available': bool(row['available'])} for row in conn.execute('SELECT * FROM products ORDER BY category,name')]}
+
+    @app.patch('/api/admin/products/{product_id}/availability')
+    def product_availability(product_id: str, body: AvailabilityInput, request: Request, admin=Depends(require_admin)):
+        with db(request) as conn:
+            if not conn.execute('UPDATE products SET available=? WHERE id=?', (int(body.available), product_id)).rowcount:
+                raise HTTPException(404, 'Produto não encontrado no cardápio.')
+            product = conn.execute('SELECT * FROM products WHERE id=?', (product_id,)).fetchone()
+            return {'product': dict(product) | {'available': bool(product['available'])}}
 
     @app.get('/api/integrations')
     def integrations():
@@ -338,7 +356,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     @app.get('/{asset:path}')
     def static_asset(asset: str):
         asset = asset or 'index.html'
-        public = {'index.html', 'app.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'style.css', 'pwa.js', 'pwa.css',
+        public = {'index.html', 'app.js', 'catalog-live.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'style.css', 'pwa.js', 'pwa.css',
                   'service-worker.js', 'manifest.webmanifest', 'admin.html', 'admin.css', 'admin.js', 'esfihas.png', 'logo-sahara.jpg'}
         allowed_image = asset.startswith(('images/', 'icons/')) and Path(asset).suffix.lower() in ('.png', '.jpg', '.jpeg', '.svg', '.ico')
         if asset not in public and not allowed_image:

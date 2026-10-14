@@ -3,13 +3,16 @@
 // Run with: node tests/ordering.spec.cjs
 // Uses the real menu with simulated time/API responses; sends no orders or messages.
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const net = require('node:net');
 const path = require('node:path');
 const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '..');
+const catalogFixture = JSON.parse(execFileSync('node', [path.join(root, 'server/export-catalog.cjs')], { encoding: 'utf8' })).map(product => ({
+  id: product.id, name: product.name, category: product.category, price_cents: product.priceCents, available: true,
+}));
 const frozenTime = '2026-10-04T20:00:00Z'; // Sunday, 17:00 in Maringá.
 let browser;
 let server;
@@ -71,6 +74,7 @@ async function newPage(options = {}) {
     };
   });
   await context.route('**/system-config.js*', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: `window.SaharaSystemConfig = { apiBase: ${JSON.stringify(options.apiBase || '')} };` }));
+  await context.route('**/api/catalog', route => route.fulfill({ status: 200, json: { products: catalogFixture } }));
   await page.goto(`${baseURL}/index.html`, { waitUntil: 'load' });
   if (!await page.evaluate(() => Boolean(window.saharaOrdering))) {
     await page.addScriptTag({ url: `${baseURL}/ordering.js` });
@@ -79,6 +83,7 @@ async function newPage(options = {}) {
     await page.addStyleTag({ url: `${baseURL}/ordering.css` });
   }
   await page.waitForFunction(() => Boolean(window.saharaOrdering && window.saharaCheckout));
+  if (options.apiBase) await page.waitForFunction(() => window.saharaCheckout.ready());
   await page.evaluate(apiBase => {
     window.SaharaSystemConfig = { ...(window.SaharaSystemConfig || {}), apiBase };
   }, options.apiBase || '');
@@ -250,6 +255,26 @@ async function run() {
     assert.match(message, /Taxa de entrega: R\$\s*8,00/);
     assert.match(message, /Total do pedido: R\$\s*12,00/);
     assert.doesNotMatch(message, /grátis na região/);
+  }, { apiBase: '/api' });
+
+  await test('A product paused during checkout is removed and the customer sees the reason', async page => {
+    let paused = false;
+    await page.route(`${baseURL}/api/catalog`, route => route.fulfill({ status: 200, json: {
+      products: paused ? catalogFixture.filter(product => product.id !== 'carne') : catalogFixture,
+    } }));
+    await address(page);
+    await page.locator('#products [data-change="queijo"][data-delta="1"]').click();
+    await page.route(`${baseURL}/api/orders`, route => {
+      paused = true;
+      return route.fulfill({ status: 409, json: { detail: 'Carne está indisponível no momento. Retire o item do pedido ou escolha outro produto.' } });
+    });
+    await page.locator('#checkout').click();
+    await page.waitForFunction(() => document.querySelector('#order-status').textContent.includes('Carne está indisponível'));
+    await page.waitForFunction(() => !window.saharaCheckout.snapshot().some(item => item.id === 'carne'));
+    assert.deepEqual(await page.evaluate(() => window.saharaCheckout.snapshot().map(item => item.id)), ['queijo']);
+    assert.equal(await page.locator('#street').inputValue(), 'Rua das Flores');
+    assert.equal(await page.locator('#order-whatsapp').isVisible(), false);
+    assert.equal(await page.evaluate(() => window.__navigated.length), 0);
   }, { apiBase: '/api' });
 
   await test('API checkout registers one order while duplicate clicks are pending', async page => {

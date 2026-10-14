@@ -35,6 +35,8 @@ def register_order(conn, body, source='web'):
         product = conn.execute('SELECT * FROM products WHERE id=?', (item.id,)).fetchone()
         if not product:
             raise HTTPException(422, 'Produto não encontrado no cardápio.')
+        if not product['available']:
+            raise HTTPException(409, f"{product['name']} está indisponível no momento. Retire o item do pedido ou escolha outro produto.")
         items.append({'id': item.id, 'name': product['name'], 'quantity': item.quantity, 'price_cents': product['price_cents']})
     customer_id = None
     if body.customer.phone:

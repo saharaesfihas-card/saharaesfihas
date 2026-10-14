@@ -81,7 +81,7 @@
   }
   function setPending(value) {
     pending = value;
-    button.disabled = value || checkout.snapshot().length === 0;
+    button.disabled = value || checkout.ready?.() === false || checkout.snapshot().length === 0;
     button.setAttribute('aria-busy', String(value));
     button.textContent = value ? 'Registrando solicitação…' : 'Continuar no WhatsApp ↗';
     // The cart render also sets disabled. Preserve this guard during its mutations.
@@ -134,7 +134,13 @@
           body: JSON.stringify({ ...payload, idempotency_key: currentAttempt.key }),
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error('registration-failed');
+        if (!response.ok) {
+          let detail;
+          try { detail = (await response.json()).detail; } catch {}
+          const error = new Error('registration-failed');
+          if (response.status === 409 && typeof detail === 'string' && detail.includes('indisponível')) error.availability = detail;
+          throw error;
+        }
         order = await response.json();
         if (!validResponse(order)) throw new Error('invalid-response');
         currentAttempt.response = order;
@@ -151,9 +157,12 @@
       if (popup) {
         try { popup.location.replace(url); } catch { try { popup.close(); } catch {} }
       }
-    } catch {
+    } catch (error) {
       if (popup) { try { popup.close(); } catch {} }
-      announce('Não foi possível registrar a solicitação. Nenhum pagamento foi realizado. Confira a conexão e tente novamente; seus itens e endereço foram preservados.', true);
+      if (error.availability) {
+        await window.saharaCatalogLive?.refresh();
+        announce(error.availability, true);
+      } else announce('Não foi possível registrar a solicitação. Nenhum pagamento foi realizado. Confira a conexão e tente novamente; seus itens e endereço foram preservados.', true);
     } finally {
       clearTimeout(timeout);
       setPending(false);

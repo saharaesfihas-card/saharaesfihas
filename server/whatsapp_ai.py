@@ -274,7 +274,7 @@ def test_generation(request, identifier, scenario='products'):
         if reason:
             return {'state': reason, 'message': DIAGNOSTICS[reason], 'checked_at': utcnow()}
         conn.execute('INSERT INTO whatsapp_ai_probes(id,day,timestamp) VALUES(?,?,?)', (identifier, day(), now))
-        products = [dict(row) for row in conn.execute('SELECT id,name,category,price_cents FROM products ORDER BY id')]
+        products = [dict(row) for row in conn.execute('SELECT id,name,category,price_cents FROM products WHERE available=1 ORDER BY id')]
     result, reason = None, ''
     try:
         question = 'Quero duas de carne e uma de queijo' if scenario == 'cart' else 'Quais esfihas salgadas você sugere e quanto custam?'
@@ -419,7 +419,7 @@ def render(conn, recipient, result, question=''):
         return customer_privacy.response()
     if reply.strip() and intent in ('products', 'conversation', 'unknown'):
         for identifier in dict.fromkeys(result['product_ids']):
-            product = conn.execute('SELECT name,price_cents FROM products WHERE id=?', (identifier,)).fetchone()
+            product = conn.execute('SELECT name,price_cents FROM products WHERE available=1 AND id=?', (identifier,)).fetchone()
             if not product:
                 raise ValueError('Produto removido.')
             price = f"R$ {product['price_cents'] // 100},{product['price_cents'] % 100:02d}"
@@ -428,7 +428,7 @@ def render(conn, recipient, result, question=''):
     if intent == 'products':
         items = []
         for identifier in dict.fromkeys(result['product_ids']):
-            product = conn.execute('SELECT name,price_cents FROM products WHERE id=?', (identifier,)).fetchone()
+            product = conn.execute('SELECT name,price_cents FROM products WHERE available=1 AND id=?', (identifier,)).fetchone()
             if not product:
                 raise ValueError('Produto removido.')
             price = f"{product['price_cents'] // 100},{product['price_cents'] % 100:02d}"
@@ -496,7 +496,7 @@ def process_one(app):
                 (job['phone'], job['id'], datetime.fromtimestamp(now - 86400, ZoneInfo('UTC')).isoformat(), job['created_at'],
                  job['phone'], job['provider'], datetime.fromtimestamp(now - 86400, ZoneInfo('UTC')).isoformat(), job['created_at'])).fetchall())
         ]
-        products = [dict(row) for row in conn.execute('SELECT id,name,category,price_cents FROM products ORDER BY id')]
+        products = [dict(row) for row in conn.execute('SELECT id,name,category,price_cents FROM products WHERE available=1 ORDER BY id')]
     result = None
     if not reason:
         try:

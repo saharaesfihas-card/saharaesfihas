@@ -115,6 +115,36 @@ async function run() {
     csrf = (await api('/admin/session')).csrf_token;
     await api('/admin/cash/sessions', { method: 'POST', data: { action: 'open' }, headers: { 'X-Sahara-CSRF': '' }, status: 403 });
   });
+  await check('Pausing and reactivating a product updates an open customer menu and its cart', async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    await context.route('**/*', route => new URL(route.request().url()).origin === baseURL ? route.continue() : route.abort());
+    const client = await context.newPage(); client.on('pageerror', error => errors.push(error.message));
+    try {
+      await client.goto(`${baseURL}/index.html`);
+      await client.waitForFunction(() => window.saharaCheckout?.ready());
+      await client.locator('#products [data-change="carne"][data-delta="1"]').click();
+      await client.locator('#products [data-change="queijo"][data-delta="1"]').click();
+      await view('menu');
+      await page.getByLabel('Buscar produto no cardápio', { exact: true }).fill('Carne');
+      await page.getByRole('button', { name: 'Pausar Carne', exact: true }).click();
+      await page.getByRole('button', { name: 'Ativar Carne', exact: true }).waitFor();
+      await client.locator('#products [data-change="carne"][data-delta="1"]').waitFor({ state: 'hidden' });
+      assert.deepEqual(await client.evaluate(() => window.saharaCheckout.snapshot().map(row => row.id)), ['queijo']);
+      assert.match(await client.locator('.catalog-status').innerText(), /Carne ficou indisponível/);
+      assert.equal(await client.locator('#products [data-change="queijo"][data-delta="1"]').isVisible(), true);
+      await page.getByRole('button', { name: 'Ativar Carne', exact: true }).click();
+      await client.locator('#products [data-change="carne"][data-delta="1"]').waitFor({ state: 'visible' });
+      assert.deepEqual(await client.evaluate(() => window.saharaCheckout.snapshot().map(row => row.id)), ['queijo']);
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await view('pos');
+      assert.ok(await page.locator('label').filter({ hasText: /^Carne/ }).count());
+    } finally {
+      await api('/admin/products/carne/availability', { method: 'PATCH', data: { available: true } });
+      await context.close();
+    }
+  });
   await check('Coupon rules include per-customer usage limit', async () => {
     await view('coupons');
     await page.locator('#field-coupons-code').fill('TESTE10');
@@ -346,6 +376,7 @@ async function run() {
     const saved = await submit('Salvar prazos de entrega', '/admin/whatsapp/delivery', 'PUT');
     assert.deepEqual(saved.origin, { latitude: -23.4656, longitude: -51.9108 });
     assert.equal(saved.five_to_six, '70');
+    await page.waitForFunction(() => document.querySelector('#screen').textContent.includes('Ponto da loja cadastrado'));
     assert.match(await page.locator('#screen').innerText(), /Ponto da loja cadastrado/);
   });
   await check('Dashboard reflects real totals, cash closes and mobile does not overflow', async () => {
