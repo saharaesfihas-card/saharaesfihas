@@ -16,7 +16,9 @@ MAX_ITEMS = 30
 PAYMENTS = {'pix': 'Pix', 'dinheiro': 'Dinheiro', 'credito': 'Cartão de crédito',
             'cartao de credito': 'Cartão de crédito', 'debito': 'Cartão de débito',
             'cartao de debito': 'Cartão de débito', 'a combinar': 'A combinar'}
-START = {'pedir', 'novo pedido', 'quero pedir', 'quero fazer um pedido', 'montar pedido'}
+START = {'pedir', 'novo pedido', 'quero pedir', 'quero fazer um pedido', 'montar pedido',
+         'quero pedir por aqui', 'quero pedir aqui', 'vou pedir por aqui', 'pedir por aqui',
+         'quero pedir pelo whatsapp', 'pedir pelo whatsapp', 'quero fazer pedido', 'fazer pedido'}
 QUESTIONS = {
     'name': 'Qual é o seu nome para o pedido?',
     'street': 'Qual é o endereço de entrega?',
@@ -286,6 +288,13 @@ def handle(conn, recipient, text):
             return prompt(conn, cart) if cart['stage'] in ('items', 'review') else summary(conn, cart) + '\n' + prompt(conn, cart)
         return 'Você ainda não tem um carrinho aberto. Envie PEDIR para começar.'
     if not active:
+        # Exact names with explicit quantities express an order without requiring PEDIR.
+        # Completed orders still require NOVO PEDIDO; questions and guesses never open carts.
+        if not cart or cart['stage'] == 'cancelled':
+            changes = parse_items(conn, text)
+            if changes and all(item['action'] == 'add' for item in changes):
+                version = (cart['id'], cart['revision']) if cart else None
+                return apply_model(conn, recipient, changes, version)
         return None
     if normalized == 'limpar carrinho':
         cart['data']['items'] = []

@@ -210,6 +210,13 @@ def conversational_welcome():
             'O que você gostaria de pedir hoje? Para montar o carrinho aqui, envie PEDIR. Para falar com a equipe, envie ATENDENTE.')
 
 
+def order_channels(reply):
+    """Keep chat ordering available whenever an automatic reply links the menu."""
+    if reply and config()['menu'] in reply and 'envie pedir' not in normalize(reply):
+        return reply + '\n\nTambém recebo seu pedido por aqui, pelo WhatsApp. Envie PEDIR ou diga os sabores e quantidades, por exemplo: 2 carne e 1 queijo.'
+    return reply
+
+
 def answer(conn, recipient, text, allow_ai=False, conversational=False, location=None):
     normalized = normalize(text)
     now = int(time.time())
@@ -281,7 +288,7 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False, location
     if allow_ai and normalized not in ('1', 'menu', 'oi', 'ola', 'bom dia', 'boa tarde', 'boa noite'):
         return whatsapp_ai.PENDING
     if normalized == '1' or re.search(r'\b(cardapio|comprar|esfiha|shawarma|pedir)\b', normalized):
-        return 'Escolha os produtos e finalize seu pedido no cardápio: ' + config()['menu'] + '\nO pedido é registrado no PDV pelo cardápio. Para atendimento pela equipe, envie ATENDENTE.'
+        return order_channels('Confira o cardápio e peça pelo site: ' + config()['menu'] + '\nPara falar com a equipe, envie ATENDENTE.')
     if natural and normalized != 'menu':
         return conversational_welcome()
     return ('Olá! Sou o atendimento automático da Sahara.\n1 — Cardápio e novo pedido\n2 — Consultar meu pedido\n'
@@ -319,7 +326,7 @@ def respond_to_inbound(conn, identifier, recipient, text, *, new_conversation=Fa
                             or normalize(text) in ('carrinho', 'confirmar pedido')) and not (contact and contact['human_until'] > int(time.time()))
         if checkout:
             conn.execute('INSERT OR IGNORE INTO whatsapp_checkout_events VALUES(?)', (identifier,))
-        queue(conn, 'reply:' + identifier, recipient, 'checkout_reply' if checkout else 'reply', reply)
+        queue(conn, 'reply:' + identifier, recipient, 'checkout_reply' if checkout else 'reply', order_channels(reply))
 
 
 @router.get('/api/whatsapp/webhook')

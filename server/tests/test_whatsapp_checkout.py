@@ -63,6 +63,37 @@ class WhatsAppCheckoutTests(unittest.TestCase):
         self.say('ATIVAR AVISOS')
         self.assertEqual(self.rows('orders')[0]['whatsapp_opt_in'], 1)
 
+    def test_menu_link_leads_directly_to_chat_order_and_pdv_confirmation(self):
+        menu = self.say('1')
+        self.assertIn(whatsapp.config()['menu'], menu)
+        self.assertIn('WhatsApp', menu)
+        self.assertIn('sabores e quantidades', menu)
+        self.say('2 carne e 1 queijo')
+        self.assertEqual(self.cart()['data']['items'], [{'id': 'carne', 'quantity': 2}, {'id': 'queijo', 'quantity': 1}])
+        for text in ['FINALIZAR', 'Cliente teste', 'Rua teste', '5', 'Centro', 'SEM COMPLEMENTO', 'SEM OBSERVAÇÃO', 'PIX']:
+            reply = self.say(text)
+        self.assertIn('CONFIRMAR PEDIDO', reply)
+        self.assertEqual(self.rows('orders'), [])
+        self.say('CONFIRMAR PEDIDO'); self.say('CONFIRMAR PEDIDO')
+        self.assertEqual(len(self.rows('orders')), 1)
+        self.assertEqual(self.rows('orders')[0]['source'], 'whatsapp')
+        self.assertEqual(self.rows('orders')[0]['total_cents'], 1200)
+
+    def test_chat_order_start_is_local_even_without_ai(self):
+        with patch.dict(os.environ, {'SAHARA_AI_ENABLED': '0'}):
+            self.assertIn('Vamos montar', self.say('quero pedir por aqui'))
+            self.say('2 KitKat')
+        self.assertEqual(self.cart()['data']['items'], [{'id': 'kitkat', 'quantity': 2}])
+        self.assertIn('R$ 11,00', self.say('CARRINHO'))
+        self.assertEqual(self.rows('whatsapp_ai_jobs'), [])
+        self.assertEqual(self.rows('orders'), [])
+
+    def test_price_questions_and_ambiguous_items_do_not_open_a_cart(self):
+        for text in ['Quanto custam 2 carne?', 'talvez 2 carne', '2 sabor desconhecido', 'REMOVER carne', '0 carne']:
+            self.inbound(text)
+            self.assertIsNone(self.cart())
+        self.assertEqual(self.rows('orders'), [])
+
     def test_duplicate_webhooks_and_repeated_confirmation_never_create_two_orders(self):
         self.review()
         key = uuid4().hex

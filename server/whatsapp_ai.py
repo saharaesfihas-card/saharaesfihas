@@ -189,6 +189,8 @@ esses marcadores por dados atuais. Não escreva valores monetários por conta pr
 Use menu para montar pedido; hours, payment, delivery e order_status para os demais assuntos da loja.
 Pedidos podem ser montados aqui com PEDIR ou no cardápio. O PDV registra somente após
 revisão e confirmação explícita local; a IA não registra pedidos nem confirma pagamentos.
+Sempre que oferecer o link do cardápio online, ofereça também receber o pedido nesta conversa.
+O cliente pode enviar PEDIR ou informar os sabores e quantidades, sem precisar sair do WhatsApp.
 Use delivery para estimativas de prazo, distância e localização de entrega. O servidor calcula o raio
 com a localização real da loja e do cliente e aplica delivery_policy; não invente distâncias,
 não localize endereços por suposição nem prometa horário exato de chegada. Sem localização confiável,
@@ -433,7 +435,7 @@ def render(conn, recipient, result, question=''):
                 raise ValueError('Produto removido.')
             price = f"{product['price_cents'] // 100},{product['price_cents'] % 100:02d}"
             items.append(f"• {product['name']} — R$ {price}")
-        return 'Posso te sugerir estas opções do nosso cardápio:\n' + '\n'.join(items) + '\nQual delas você prefere? Escolha as quantidades e finalize aqui: ' + whatsapp.config()['menu']
+        return 'Posso te sugerir estas opções do nosso cardápio:\n' + '\n'.join(items) + '\nQual delas você prefere?\nPeça pelo site: ' + whatsapp.config()['menu']
     if intent == 'delivery':
         from . import delivery_estimates
         return delivery_estimates.response(conn, recipient, question)
@@ -526,7 +528,7 @@ def process_one(app):
                 contact = whatsapp.contact_identity(conn, job['phone'])
                 handed_off = contact and contact['human_until'] > int(time.time())
                 kind = 'reply' if handed_off or result and result['intent'] == 'handoff' else 'checkout_reply' if result and result['intent'] == 'cart' else 'ai_reply'
-                whatsapp.queue(conn, 'reply:' + job['id'], job['phone'], kind, reply)
+                whatsapp.queue(conn, 'reply:' + job['id'], job['phone'], kind, whatsapp.order_channels(reply))
             status = 'fallback' if reason else 'done'
         conn.execute('UPDATE whatsapp_ai_jobs SET status=?,reason=?,updated_at=? WHERE id=?', (status, reason, utcnow(), job['id']))
     return True

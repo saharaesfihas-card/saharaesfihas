@@ -142,6 +142,17 @@ class DeliveryAITests(unittest.TestCase):
         self.assertIn('Me diga o que você precisa', reply)
         self.assertNotIn('1 —', reply)
 
+    def test_ai_product_suggestions_with_menu_link_offer_ordering_inside_whatsapp(self):
+        self.inbound('Quero ver o cardápio online')
+        result = {'intent': 'products', 'product_ids': ['carne']}
+        with patch.object(ai, 'interpret', return_value=result):
+            self.assertTrue(ai.process_one(self.app))
+        reply = self.rows('whatsapp_outbox')[0]['body']
+        self.assertIn('R$ 4,00', reply)
+        self.assertIn('Envie PEDIR ou diga os sabores e quantidades', reply)
+        self.assertEqual(self.rows('orders'), [])
+        self.assertEqual(self.rows('whatsapp_carts'), [])
+
     def test_general_question_sends_generated_answer_instead_of_menu(self):
         self.inbound('Por que o céu é azul?')
         result = {'intent': 'conversation', 'product_ids': [],
