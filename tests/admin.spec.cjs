@@ -115,6 +115,24 @@ async function run() {
     csrf = (await api('/admin/session')).csrf_token;
     await api('/admin/cash/sessions', { method: 'POST', data: { action: 'open' }, headers: { 'X-Sahara-CSRF': '' }, status: 403 });
   });
+  await check('Weekly promotions start paused and can be programmed independently of product availability', async () => {
+    await view('menu');
+    const initial = await api('/admin/product-promotions');
+    assert.equal(initial.promotions.length, 3);
+    assert.ok(initial.promotions.every(row => row.enabled === false && row.price_cents === 299));
+    await page.getByRole('button', { name: 'Programar Segunda da Calabresa', exact: true }).click();
+    await page.getByRole('button', { name: 'Pausar Segunda da Calabresa', exact: true }).waitFor();
+    const programmed = await api('/admin/product-promotions');
+    assert.equal(programmed.promotions.find(row => row.product_id === 'calabresa').enabled, true);
+    assert.ok(programmed.promotions.filter(row => row.product_id !== 'calabresa').every(row => !row.enabled));
+    assert.equal((await api('/admin/products')).products.find(row => row.id === 'calabresa').available, true);
+    await page.getByRole('button', { name: 'Pausar Segunda da Calabresa', exact: true }).click();
+    await page.getByRole('button', { name: 'Programar Segunda da Calabresa', exact: true }).waitFor();
+    assert.ok((await api('/admin/product-promotions')).promotions.every(row => !row.enabled));
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await page.setViewportSize({ width: 1280, height: 900 });
+  });
   await check('Pausing and reactivating a product updates an open customer menu and its cart', async () => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
     await context.route('**/*', route => new URL(route.request().url()).origin === baseURL ? route.continue() : route.abort());

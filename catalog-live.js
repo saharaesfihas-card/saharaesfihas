@@ -29,6 +29,7 @@
           !Number.isSafeInteger(product.price_cents) || product.price_cents < 0 ||
           (product.available !== undefined && typeof product.available !== 'boolean'))) throw new Error();
       const next = JSON.stringify(data.products);
+      window.SaharaSystemConfig.priceConfirmation = data.price_confirmation === true;
       if (next !== fingerprint) {
         const removed = checkout.applyCatalog(data.products);
         fingerprint = next;

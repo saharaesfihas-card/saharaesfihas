@@ -6,13 +6,15 @@ import uuid
 
 from fastapi import HTTPException
 
-from . import marketing, operations, whatsapp, delivery_estimates
+from . import marketing, operations, whatsapp, delivery_estimates, product_promotions
 from .core import utcnow, next_order_number, order_reference
 
 
 def register_order(conn, body, source='web'):
     from .main import schedule
     raw = body.model_dump(mode='json')
+    if raw.get('expected_subtotal_cents') is None:
+        raw.pop('expected_subtotal_cents', None)
     # Preserva os identificadores de tentativas anteriores à integração.
     if not raw['customer']['whatsapp_opt_in']:
         raw['customer'].pop('whatsapp_opt_in')
@@ -31,13 +33,17 @@ def register_order(conn, body, source='web'):
     if len(ids) != len(set(ids)):
         raise HTTPException(422, 'Há produtos repetidos no pedido.')
     items = []
+    pricing_moment = product_promotions.local_now()
     for item in body.items:
-        product = conn.execute('SELECT * FROM products WHERE id=?', (item.id,)).fetchone()
+        product = product_promotions.product(conn, item.id, pricing_moment)
         if not product:
             raise HTTPException(422, 'Produto não encontrado no cardápio.')
         if not product['available']:
             raise HTTPException(409, f"{product['name']} está indisponível no momento. Retire o item do pedido ou escolha outro produto.")
         items.append({'id': item.id, 'name': product['name'], 'quantity': item.quantity, 'price_cents': product['price_cents']})
+    subtotal = sum(item['quantity'] * item['price_cents'] for item in items)
+    if body.expected_subtotal_cents is not None and body.expected_subtotal_cents != subtotal:
+        raise HTTPException(409, 'Os preços do cardápio mudaram. Confira o valor atualizado e confirme novamente.')
     customer_id = None
     if body.customer.phone:
         customer = conn.execute('SELECT * FROM customers WHERE phone=?', (body.customer.phone,)).fetchone()
@@ -49,7 +55,6 @@ def register_order(conn, body, source='web'):
         else:
             conn.execute('INSERT INTO customers(id,name,phone,marketing_opt_in,created_at) VALUES(?,?,?,?,?)',
                          (customer_id, body.customer.name, body.customer.phone, int(body.customer.marketing_opt_in), utcnow()))
-    subtotal = sum(item['quantity'] * item['price_cents'] for item in items)
     code = body.coupon_code.strip().upper() if body.coupon_code else None
     discount = marketing.coupon_discount(conn, code, subtotal, customer_id)
     if not 0 <= discount <= subtotal:

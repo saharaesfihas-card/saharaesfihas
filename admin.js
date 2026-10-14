@@ -10,7 +10,7 @@
   const views = {
     orders: ['Pedidos e cozinha', 'Acompanhe os pedidos de delivery, prepare as comandas e organize a entrega.'],
     pos: ['Novo pedido · PDV', 'Registre um pedido recebido por telefone ou WhatsApp usando os preços do cardápio.'],
-    menu: ['Cardápio', 'Pause os itens indisponíveis e ative novamente quando o produto voltar.'],
+    menu: ['Cardápio', 'Controle a disponibilidade e as promoções programadas por dia da semana.'],
     dashboard: ['Resultados', 'Acompanhe os pedidos e as vendas com pagamento recebido.'],
     inventory: ['Estoque', 'Registre insumos e entradas ou saídas para acompanhar a disponibilidade.'],
     cash: ['Caixa', 'Abra e feche o caixa e registre suas movimentações financeiras.'],
@@ -461,7 +461,26 @@
   }
 
   async function loadMenu(screen) {
-    const data = await api('/admin/products');
+    const [data, promotionData] = await Promise.all([api('/admin/products'), api('/admin/product-promotions')]);
+    const promotions = list(promotionData, 'promotions');
+    const offers = panel('Promoções da semana', 'Sem quantidade mínima e sem limite promocional de unidades. Ao programar, o preço vale apenas no dia indicado, no horário de Maringá; nos demais dias volta ao preço normal. Promoções pausadas não são oferecidas aos clientes.');
+    const offerRows = el('div'); offers.append(offerRows);
+    function showPromotions() {
+      offerRows.replaceChildren(table('Promoções semanais', [['Promoção', row => row.name], ['Dia', row => row.day],
+        ['Preço normal', row => money(row.regular_price_cents)], ['Preço promocional', row => money(row.price_cents)],
+        ['Situação', row => badge(!row.enabled ? 'Pausada' : !row.available ? 'Produto indisponível' : row.effective_today ? 'Em promoção hoje' : 'Programada', row.effective_today ? 'success' : 'warning')],
+        ['Ação', row => {
+          const control = button(row.enabled ? 'Pausar programação' : 'Programar por dia', async () => {
+            const response = await api(`/admin/product-promotions/${encodeURIComponent(row.product_id)}`, { method: 'PATCH', body: { enabled: !row.enabled } });
+            promotions.splice(0, promotions.length, ...list(response, 'promotions'));
+            const updated = promotions.find(item => item.product_id === row.product_id);
+            showNotice(`${row.name}: ${updated.enabled ? `programada para ${updated.day}` : 'pausada; preço normal mantido'}.`);
+            showPromotions();
+          });
+          control.setAttribute('aria-label', `${row.enabled ? 'Pausar' : 'Programar'} ${row.name}`); return control;
+        }]], promotions));
+    }
+    showPromotions(); screen.append(offers);
     const products = list(data, 'products');
     const p = panel('Disponibilidade dos produtos', 'Itens pausados ficam ocultos para os clientes e não podem entrar em novos pedidos. Páginas abertas atualizam automaticamente em até 3 segundos.');
     const search = el('input'); search.type = 'search'; search.placeholder = 'Buscar produto'; search.setAttribute('aria-label', 'Buscar produto no cardápio');
@@ -480,6 +499,11 @@
           const control = button(row.available ? 'Pausar item' : 'Ativar item', async () => {
             const response = await api(`/admin/products/${encodeURIComponent(row.id)}/availability`, { method: 'PATCH', body: { available: !row.available } });
             row.available = response.product.available;
+            const promotion = promotions.find(item => item.product_id === row.id);
+            if (promotion) {
+              const current = await api('/admin/product-promotions');
+              promotions.splice(0, promotions.length, ...list(current, 'promotions')); showPromotions();
+            }
             showNotice(`${row.name}: ${row.available ? 'ativado e disponível no cardápio' : 'pausado e oculto para os clientes'}.`);
             filter();
           });
@@ -502,7 +526,7 @@
       const fingerprint = JSON.stringify(payload);
       if (orderFingerprint && orderFingerprint !== fingerprint) idempotencyKey = crypto.randomUUID();
       orderFingerprint = fingerprint;
-      await api('/admin/orders', { method: 'POST', body: { ...payload, idempotency_key: idempotencyKey } });
+      await api('/admin/orders', { method: 'POST', body: { ...payload, expected_subtotal_cents: quantityInputs.reduce((sum, [product, input]) => sum + Number(input.value) * product.price_cents, 0), idempotency_key: idempotencyKey } });
       idempotencyKey = crypto.randomUUID();
       showNotice('Pedido registrado. Acompanhe a preparação em Pedidos e cozinha.');
       state.view = 'orders'; state.orderFilter = 'active'; state.orderQuery = ''; await renderView();

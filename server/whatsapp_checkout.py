@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from .core import utcnow
-from . import evolution
+from . import evolution, product_promotions
 
 TTL = 86400
 MAX_ITEMS = 30
@@ -77,11 +77,12 @@ def money(cents):
 
 def priced_items(conn, cart):
     result = []
+    moment = product_promotions.local_now()
     for item in cart['data']['items']:
-        product = conn.execute('SELECT id,name,price_cents FROM products WHERE id=?', (item['id'],)).fetchone()
+        product = product_promotions.product(conn, item['id'], moment)
         if not product:
             raise ValueError('Um produto do carrinho saiu do cardápio. Envie ALTERAR CARRINHO para revisar.')
-        result.append(dict(product) | {'quantity': item['quantity']})
+        result.append({key: product[key] for key in ('id', 'name', 'price_cents')} | {'quantity': item['quantity']})
     return result
 
 

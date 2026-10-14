@@ -257,6 +257,42 @@ async function run() {
     assert.doesNotMatch(message, /grátis na região/);
   }, { apiBase: '/api' });
 
+  await test('A promotional price updates its badge and mixed cart, then expires without removing items', async page => {
+    let promotion = false;
+    await page.route(`${baseURL}/api/catalog`, route => route.fulfill({ status: 200, json: {
+      price_confirmation: true,
+      products: catalogFixture.map(product => product.id === 'carne' && promotion ? {
+        ...product, price_cents: 299, regular_price_cents: 400,
+        promotion: { name: 'Quarta da Carne', day: 'quarta-feira' },
+      } : product),
+    } }));
+    await address(page);
+    await page.locator('#products [data-change="queijo"][data-delta="1"]').click();
+    const card = page.locator('.product').filter({ has: page.locator('[data-quantity="carne"]') });
+    assert.equal(await card.locator('.promotion-label').isVisible(), false);
+    promotion = true;
+    await page.evaluate(() => window.saharaCatalogLive.refresh());
+    await page.waitForFunction(() => window.saharaCheckout.snapshot().find(row => row.id === 'carne').priceCents === 299);
+    assert.match(await card.locator('.promotion-label').innerText(), /Quarta da Carne/);
+    assert.match(await card.locator('.price del').innerText(), /4,00/);
+    assert.match(await page.locator('#order-total').innerText(), /6,99/);
+    promotion = false;
+    await page.evaluate(() => window.saharaCatalogLive.refresh());
+    await page.waitForFunction(() => window.saharaCheckout.snapshot().find(row => row.id === 'carne').priceCents === 400);
+    assert.equal(await card.locator('.promotion-label').isVisible(), false);
+    assert.equal(await card.locator('.price del').count(), 0);
+    assert.match(await page.locator('#order-total').innerText(), /8,00/);
+    assert.deepEqual(await page.evaluate(() => window.saharaCheckout.snapshot().map(row => row.id)), ['carne', 'queijo']);
+    assert.equal(await page.locator('#street').inputValue(), 'Rua das Flores');
+    let submitted;
+    await page.route(`${baseURL}/api/orders`, route => {
+      submitted = route.request().postDataJSON();
+      return route.fulfill({ status: 409, json: { detail: 'Os preços do cardápio mudaram. Confira o valor atualizado e confirme novamente.' } });
+    });
+    await page.locator('#checkout').click();
+    await page.waitForFunction(() => document.querySelector('#order-status').textContent.includes('Os preços do cardápio mudaram'));
+    assert.equal(submitted.expected_subtotal_cents, 800);
+  }, { apiBase: '/api' });
   await test('A product paused during checkout is removed and the customer sees the reason', async page => {
     let paused = false;
     await page.route(`${baseURL}/api/catalog`, route => route.fulfill({ status: 200, json: {

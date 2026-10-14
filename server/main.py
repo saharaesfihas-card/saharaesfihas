@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
-from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders, delivery_estimates
+from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders, delivery_estimates, product_promotions
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
 from .evolution import valid_url as valid_public_url
 
@@ -76,10 +76,14 @@ class OrderInput(Model):
     notes: str = Field(default='', max_length=500)
     requested_for: AwareDatetime | None = None
     coupon_code: str | None = Field(default=None, max_length=40)
+    expected_subtotal_cents: StrictInt | None = Field(default=None, ge=0, le=1_000_000_000)
     idempotency_key: str = Field(min_length=16, max_length=128)
 
 class AvailabilityInput(Model):
     available: StrictBool
+
+class PromotionInput(Model):
+    enabled: StrictBool
 
 class StatusInput(Model):
     status: Literal['confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']
@@ -149,6 +153,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
             conn.execute('INSERT INTO products(id,name,category,price_cents) VALUES(?,?,?,?) '
                          'ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,price_cents=excluded.price_cents',
                          (product['id'], product['name'], product['category'], product['priceCents']))
+        product_promotions.initialize(conn)
         conn.commit()
     os.chmod(db_path, 0o600)
 
@@ -181,7 +186,20 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     @app.get('/api/catalog')
     def products(request: Request):
         with db(request) as conn:
-            return {'products': [dict(row) | {'available': bool(row['available'])} for row in conn.execute('SELECT * FROM products WHERE available=1 ORDER BY category,name')]}
+            return {'products': product_promotions.catalog(conn), 'price_confirmation': True}
+
+    @app.get('/api/admin/product-promotions')
+    def promotions(request: Request, admin=Depends(require_admin)):
+        with db(request) as conn:
+            return product_promotions.dashboard(conn)
+
+    @app.patch('/api/admin/product-promotions/{product_id}')
+    def promotion_setting(product_id: str, body: PromotionInput, request: Request, admin=Depends(require_admin)):
+        with db(request) as conn:
+            if not conn.execute('UPDATE product_promotions SET enabled=? WHERE product_id=?',
+                                (int(body.enabled), product_id)).rowcount:
+                raise HTTPException(404, 'Promoção não encontrada.')
+            return product_promotions.dashboard(conn)
 
     @app.get('/api/admin/products')
     def admin_products(request: Request, admin=Depends(require_admin)):

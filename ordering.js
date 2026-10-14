@@ -108,6 +108,7 @@
       items: prepared.items, customer: prepared.customer, delivery: prepared.delivery,
       payment_method: prepared.paymentMethod, notes: prepared.notes,
       requested_for: null, coupon_code: null,
+      ...(window.SaharaSystemConfig?.priceConfirmation ? { expected_subtotal_cents: prepared.totalCents } : {}),
     };
     const fingerprint = JSON.stringify({ apiBase: configuration.url, payload });
     if (!attempt || attempt.fingerprint !== fingerprint) {
@@ -138,7 +139,7 @@
           let detail;
           try { detail = (await response.json()).detail; } catch {}
           const error = new Error('registration-failed');
-          if (response.status === 409 && typeof detail === 'string' && detail.includes('indisponível')) error.availability = detail;
+          if (response.status === 409 && typeof detail === 'string') error.availability = detail;
           throw error;
         }
         order = await response.json();

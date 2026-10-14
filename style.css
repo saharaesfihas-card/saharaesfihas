@@ -94,3 +94,6 @@ html{scroll-padding-top:var(--category-nav-offset)}
 
 #products[hidden], #products .product[hidden], #products .category[hidden], .category-link[hidden] { display: none !important; }
 .catalog-status { padding: 12px 16px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; line-height: 1.5; }
+
+/* Ofertas semanais: exibidas apenas quando válidas no catálogo do servidor. */
+.promotion-label{display:inline-block;margin-top:9px;padding:5px 9px;border-radius:7px;background:#f7dfb9;color:#611e2d;font-size:12px;font-weight:700;line-height:1.4}.promotion-label[hidden]{display:none}.has-promotion .price{font-weight:700;font-size:16px}.has-promotion .price del{font-size:12px;font-weight:400;color:#78676e;margin-right:5px}
