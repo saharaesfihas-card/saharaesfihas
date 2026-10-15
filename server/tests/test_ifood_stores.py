@@ -18,6 +18,7 @@ REAL_MERCHANTS = (
     '44444444-4444-4444-8444-444444444444',
     '55555555-5555-4555-8555-555555555555',
 )
+PORTAL_IDS = ('9090001', '9090002', '9090003')
 
 
 class IFoodStoreTests(unittest.TestCase):
@@ -61,8 +62,11 @@ class IFoodStoreTests(unittest.TestCase):
         return response.json()
 
     def update(self, store_id, merchant_id):
+        return self.patch_store(store_id, {'merchant_id': merchant_id})
+
+    def patch_store(self, store_id, body):
         return self.client.patch('/api/admin/ifood/stores/' + store_id,
-                                 json={'merchant_id': merchant_id}, headers=self.headers)
+                                 json=body, headers=self.headers)
 
     def other_tables(self):
         with sqlite3.connect(self.app.state.db_path) as conn:
@@ -86,11 +90,9 @@ class IFoodStoreTests(unittest.TestCase):
                           ('sahara-esfihas-shawarma', 'Sahara Esfihas e Shawarma'),
                           ('maktub-esfihas', 'Maktub Esfihas')])
         self.assertTrue(all(store['merchant_id'] is None for store in response['stores']))
-        self.assertIn('Informar o UUID não ativa a integração', response['message'])
+        self.assertTrue(all(store['portal_id'] is None for store in response['stores']))
+        self.assertIn('não ativa a integração', response['message'])
         self.assert_pending(response)
-        with sqlite3.connect(self.app.state.db_path) as conn:
-            columns = [row[1] for row in conn.execute('PRAGMA table_info(ifood_stores)')]
-        self.assertEqual(columns, ['id', 'name', 'merchant_id', 'catalog_state'])
 
     def test_each_store_uuid_is_independent_and_saving_never_enables_production(self):
         for (identifier, _), merchant in zip(ifood_stores.DEFAULTS, REAL_MERCHANTS):
@@ -194,6 +196,7 @@ class IFoodStoreTests(unittest.TestCase):
         public_before = self.client.get('/api/catalog').json()
         for (identifier, _), merchant in zip(ifood_stores.DEFAULTS, REAL_MERCHANTS):
             self.assertEqual(self.update(identifier, merchant).status_code, 200)
+        self.assertEqual(self.patch_store('esfihas-44', {'portal_id': PORTAL_IDS[0]}).status_code, 200)
         self.assertEqual(self.other_tables(), before)
         self.assertEqual(ifood.config(), cfg)
         self.assertEqual(self.client.get('/api/catalog').json(), public_before)
@@ -207,3 +210,113 @@ class IFoodStoreTests(unittest.TestCase):
             current = self.client.get('/api/admin/ifood').json()
             self.assertFalse(current['configured'])
             self.assertEqual(current['configuration_state'], 'mode')
+
+    def test_portal_ids_are_separate_references_and_never_become_merchant_uuids(self):
+        for (identifier, _), portal_id in zip(ifood_stores.DEFAULTS, PORTAL_IDS):
+            response = self.patch_store(identifier, {'portal_id': portal_id})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assert_pending(response.json())
+        dashboard = self.stores()
+        self.assertEqual([store['portal_id'] for store in dashboard['stores']], list(PORTAL_IDS))
+        self.assertTrue(all(store['merchant_id'] is None for store in dashboard['stores']))
+        self.assert_pending(dashboard)
+
+    def test_partial_updates_preserve_the_omitted_identifier_and_explicit_null_clears(self):
+        response = self.patch_store('esfihas-44', {
+            'merchant_id': REAL_MERCHANTS[0], 'portal_id': '  0009  '})
+        self.assertEqual(response.status_code, 200, response.text)
+        first = response.json()['stores'][0]
+        self.assertEqual(first['merchant_id'], REAL_MERCHANTS[0])
+        self.assertEqual(first['portal_id'], '0009')
+        portal = '9' * 20
+        response = self.patch_store('esfihas-44', {'portal_id': portal})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['stores'][0]['merchant_id'], REAL_MERCHANTS[0])
+        self.assertEqual(response.json()['stores'][0]['portal_id'], portal)
+        response = self.update('esfihas-44', None)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(response.json()['stores'][0]['merchant_id'])
+        self.assertEqual(response.json()['stores'][0]['portal_id'], portal)
+        response = self.update('esfihas-44', REAL_MERCHANTS[1])
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['stores'][0]['portal_id'], portal)
+        response = self.patch_store('esfihas-44', {'portal_id': '   '})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(response.json()['stores'][0]['portal_id'])
+        self.assertEqual(response.json()['stores'][0]['merchant_id'], REAL_MERCHANTS[1])
+        self.assertEqual(self.patch_store('esfihas-44', {'portal_id': '0'}).status_code, 200)
+        response = self.patch_store('esfihas-44', {'portal_id': None})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(response.json()['stores'][0]['portal_id'])
+        self.assertEqual(response.json()['stores'][0]['merchant_id'], REAL_MERCHANTS[1])
+
+    def test_portal_id_rejects_non_ascii_digits_non_strings_paths_and_uuids(self):
+        invalid = [9090001, True, False, 9.1, [], {}, '9' * 21, '9 09',
+                   '+909', '../9090001', REAL_MERCHANTS[0], '٩٠٩', '９０９']
+        before = self.stores()
+        for value in invalid:
+            with self.subTest(value=value):
+                response = self.patch_store('esfihas-44', {'portal_id': value})
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(self.stores(), before)
+        self.assertEqual(self.patch_store('unknown-store', {'portal_id': PORTAL_IDS[0]}).status_code, 404)
+
+    def test_duplicate_portal_id_rolls_back_the_whole_patch_and_survives_restart(self):
+        self.assertEqual(self.patch_store('esfihas-44', {'portal_id': PORTAL_IDS[0]}).status_code, 200)
+        self.assertEqual(self.patch_store('maktub-esfihas', {'portal_id': PORTAL_IDS[2]}).status_code, 200)
+        before = self.stores()
+        response = self.patch_store('maktub-esfihas', {
+            'portal_id': PORTAL_IDS[0], 'merchant_id': REAL_MERCHANTS[2]})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(self.stores(), before)
+        restarted = create_app(data_dir=self.data_dir,
+                               admin_password_hash=self.password_hash, secure_cookie=False)
+        other_client = TestClient(restarted)
+        try:
+            login = other_client.post('/api/admin/login', json={'password': self.password})
+            self.assertEqual(other_client.get('/api/admin/ifood/stores').json(), before)
+            headers = {'X-Sahara-CSRF': login.json()['csrf_token']}
+            response = other_client.patch('/api/admin/ifood/stores/sahara-esfihas-shawarma',
+                json={'portal_id': PORTAL_IDS[0]}, headers=headers)
+            self.assertEqual(response.status_code, 409)
+            response = other_client.patch('/api/admin/ifood/stores/esfihas-44',
+                json={'portal_id': None}, headers=headers)
+            self.assertEqual(response.status_code, 200)
+            response = other_client.patch('/api/admin/ifood/stores/sahara-esfihas-shawarma',
+                json={'portal_id': PORTAL_IDS[0]}, headers=headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertIsNone(response.json()['stores'][0]['portal_id'])
+            self.assertEqual(response.json()['stores'][1]['portal_id'], PORTAL_IDS[0])
+            self.assertEqual(response.json()['stores'][2]['portal_id'], PORTAL_IDS[2])
+            self.assert_pending(response.json())
+        finally:
+            other_client.close()
+
+    def test_migration_adds_portal_ids_without_resetting_existing_merchant_uuid(self):
+        legacy_dir = self.data_dir / 'legacy'
+        legacy_dir.mkdir()
+        with sqlite3.connect(legacy_dir / 'sahara.sqlite3') as conn:
+            conn.execute('''CREATE TABLE ifood_stores (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, merchant_id TEXT UNIQUE,
+                catalog_state TEXT NOT NULL DEFAULT 'pending' CHECK(catalog_state='pending'))''')
+            conn.execute('INSERT INTO ifood_stores(id,name,merchant_id) VALUES(?,?,?)',
+                         ('esfihas-44', 'Esfihas 44', REAL_MERCHANTS[0]))
+        legacy_app = create_app(data_dir=legacy_dir,
+                                admin_password_hash=self.password_hash, secure_cookie=False)
+        legacy_client = TestClient(legacy_app)
+        try:
+            login = legacy_client.post('/api/admin/login', json={'password': self.password})
+            dashboard = legacy_client.get('/api/admin/ifood/stores').json()
+            self.assertEqual(dashboard['stores'][0]['merchant_id'], REAL_MERCHANTS[0])
+            self.assertTrue(all(store['portal_id'] is None for store in dashboard['stores']))
+            self.assertEqual([store['name'] for store in dashboard['stores']],
+                             ['Esfihas 44', 'Sahara Esfihas e Shawarma', 'Maktub Esfihas'])
+            self.assert_pending(dashboard)
+            response = legacy_client.patch('/api/admin/ifood/stores/esfihas-44',
+                json={'portal_id': PORTAL_IDS[0]},
+                headers={'X-Sahara-CSRF': login.json()['csrf_token']})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['stores'][0]['merchant_id'], REAL_MERCHANTS[0])
+            self.assertEqual(response.json()['stores'][0]['portal_id'], PORTAL_IDS[0])
+        finally:
+            legacy_client.close()

@@ -914,6 +914,17 @@
       const heading = el('h3', store.name); heading.append(badge('Produção pendente', 'pending'));
       card.append(heading, el('p', 'Cardápio próprio · produtos e preços ainda não vinculados.', 'help'));
       const form = el('form');
+      const grid = el('div', undefined, 'form-grid');
+      const portalWrap = el('div', undefined, 'field');
+      const portalLabel = el('label', 'ID numérico no Portal do Parceiro');
+      const portalInput = el('input'); portalInput.name = 'portal_id'; portalInput.type = 'text';
+      portalInput.inputMode = 'numeric'; portalInput.pattern = '[0-9]*'; portalInput.maxLength = 20;
+      portalInput.id = `ifood-store-${store.id}-portal`; portalLabel.htmlFor = portalInput.id;
+      portalInput.value = store.portal_id || ''; portalInput.autocomplete = 'off'; portalInput.spellcheck = false;
+      portalInput.placeholder = 'Número mostrado em Escolher loja';
+      const portalHint = el('p', 'Referência da loja no Portal. É diferente do UUID da integração.', 'help');
+      portalHint.id = `${portalInput.id}-help`; portalInput.setAttribute('aria-describedby', portalHint.id);
+      portalWrap.append(portalLabel, portalInput, portalHint);
       const wrap = el('div', undefined, 'field');
       const label = el('label', 'ID da loja no iFood (Merchant UUID)');
       const input = el('input'); input.name = 'merchant_id'; input.type = 'text'; input.maxLength = 100;
@@ -924,29 +935,31 @@
       hint.id = `${input.id}-help`; input.setAttribute('aria-describedby', hint.id);
       wrap.append(label, input, hint);
       const save = el('button', 'Salvar identificação', 'small-button'); save.type = 'submit';
-      const status = el('p', store.merchant_id ? 'Identificação salva. Conexão de produção pendente.' : 'Aguardando a identificação da loja real.', 'help ifood-store-status');
+      const savedMessage = saved => saved.merchant_id ? 'Identificação salva. Conexão de produção pendente.' : saved.portal_id ? 'ID do Portal salvo. UUID e conexão de produção pendentes.' : 'Aguardando a identificação da loja real.';
+      const status = el('p', savedMessage(store), 'help ifood-store-status');
       status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
       const actions = el('div', undefined, 'form-actions'); actions.append(save, status);
-      form.append(wrap, actions); card.append(form);
+      grid.append(portalWrap, wrap); form.append(grid, actions); card.append(form);
       form.addEventListener('submit', async event => {
         event.preventDefault(); if (save.disabled) return;
         savingStores++; refreshStoresButton.disabled = true;
-        save.disabled = true; input.disabled = true; form.setAttribute('aria-busy', 'true');
+        save.disabled = true; input.disabled = true; portalInput.disabled = true; form.setAttribute('aria-busy', 'true');
         status.classList.remove('danger-text'); status.textContent = 'Salvando a identificação…';
         try {
-          const result = await api(`/admin/ifood/stores/${encodeURIComponent(store.id)}`, { method: 'PATCH', body: { merchant_id: input.value.trim() || null } });
+          const result = await api(`/admin/ifood/stores/${encodeURIComponent(store.id)}`, { method: 'PATCH', body: { merchant_id: input.value.trim() || null, portal_id: portalInput.value.trim() || null } });
           if (generation !== state.generation || !state.csrf) return;
           const saved = list(result, 'stores').find(item => item.id === store.id);
           if (!saved) throw new Error('Não foi possível confirmar o cadastro. Atualize as lojas para conferir.');
           input.value = saved.merchant_id || ''; input.removeAttribute('aria-invalid');
-          status.textContent = saved.merchant_id ? 'Identificação salva. Conexão de produção pendente.' : 'Identificação removida. Conexão de produção pendente.';
+          portalInput.value = saved.portal_id || '';
+          status.textContent = saved.merchant_id || saved.portal_id ? savedMessage(saved) : 'Identificação removida. Conexão de produção pendente.';
         } catch (error) {
           if (generation === state.generation) {
             status.textContent = error.message; status.classList.add('danger-text');
           }
         } finally {
           savingStores--; refreshStoresButton.disabled = savingStores > 0;
-          save.disabled = false; input.disabled = false; form.setAttribute('aria-busy', 'false');
+          save.disabled = false; input.disabled = false; portalInput.disabled = false; form.setAttribute('aria-busy', 'false');
         }
       });
       return card;

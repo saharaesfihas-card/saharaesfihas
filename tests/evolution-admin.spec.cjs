@@ -36,7 +36,7 @@ const ifoodStores = {
     ['esfihas-44', 'Esfihas 44'],
     ['sahara-esfihas-shawarma', 'Sahara Esfihas e Shawarma'],
     ['maktub-esfihas', 'Maktub Esfihas'],
-  ].map(([id, name]) => ({ id, name, merchant_id: null, environment: 'production', connection_state: 'production_pending', catalog_state: 'pending', import_available: false })),
+  ].map(([id, name]) => ({ id, name, merchant_id: null, portal_id: null, environment: 'production', connection_state: 'production_pending', catalog_state: 'pending', import_available: false })),
   message: 'Os dados de cada loja são independentes. A conexão de produção continua pendente.',
 };
 

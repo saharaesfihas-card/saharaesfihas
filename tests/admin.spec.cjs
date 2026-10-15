@@ -117,10 +117,10 @@ async function run() {
   });
   await check('Three iFood store identities stay separate, survive navigation and never enable production or copy the catalog', async () => {
     const stores = [
-      { id: 'esfihas-44', name: 'Esfihas 44', merchant: '11111111-1111-4111-8111-111111111111' },
-      { id: 'sahara-esfihas-shawarma', name: 'Sahara Esfihas e Shawarma', merchant: '22222222-2222-4222-8222-222222222222' },
-      { id: 'maktub-esfihas', name: 'Maktub Esfihas', merchant: '33333333-3333-4333-8333-333333333333' },
-    ]; // Fictitious UUIDs: this test uses only its disposable backend.
+      { id: 'esfihas-44', name: 'Esfihas 44', merchant: '11111111-1111-4111-8111-111111111111', portal: '9100001' },
+      { id: 'sahara-esfihas-shawarma', name: 'Sahara Esfihas e Shawarma', merchant: '22222222-2222-4222-8222-222222222222', portal: '9100002' },
+      { id: 'maktub-esfihas', name: 'Maktub Esfihas', merchant: '33333333-3333-4333-8333-333333333333', portal: '9100003' },
+    ]; // Fictitious UUIDs and Portal IDs: this test uses only its disposable backend.
     const catalogBefore = (await api('/catalog')).products;
     const integrationBefore = await api('/admin/ifood');
     const initial = await api('/admin/ifood/stores');
@@ -136,20 +136,22 @@ async function run() {
       assert.deepEqual(rows.map(row => ({ id: row.id, name: row.name })), stores.map(({ id, name }) => ({ id, name })));
       assert.ok(rows.every(row => row.environment === 'production' && row.connection_state === 'production_pending' && row.catalog_state === 'pending' && row.import_available === false));
     };
-    const save = async (store, merchant, status = 200) => {
+    const save = async (store, merchant, status = 200, portal) => {
       const card = cardFor(store);
       await card.getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).fill(merchant);
+      if (portal !== undefined) await card.getByLabel('ID numérico no Portal do Parceiro', { exact: true }).fill(portal);
       const received = page.waitForResponse(response => response.url().endsWith(`/api/admin/ifood/stores/${store.id}`) && response.request().method() === 'PATCH');
       await card.getByRole('button', { name: 'Salvar identificação', exact: true }).click();
       const response = await received;
       const body = await response.json();
       assert.equal(response.status(), status, JSON.stringify(body));
+      await card.locator('form[aria-busy="false"]').waitFor();
       await card.locator('.ifood-store-status').filter({ hasText: status === 200 ? /salv|removid/i : body.detail }).waitFor();
       return body;
     };
     try {
       assertPending(initial.stores);
-      assert.ok(initial.stores.every(row => row.merchant_id === null));
+      assert.ok(initial.stores.every(row => row.merchant_id === null && row.portal_id === null));
       await view('integrations');
       const panel = page.getByRole('region', { name: 'Lojas reais no iFood', exact: true });
       await panel.getByRole('heading', { name: 'iFood · três lojas reais', exact: true }).waitFor();
@@ -158,44 +160,74 @@ async function run() {
       for (const store of stores) {
         await cardFor(store).getByRole('heading', { name: store.name }).waitFor();
         assert.equal(await cardFor(store).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), '');
+        assert.equal(await cardFor(store).getByLabel('ID numérico no Portal do Parceiro', { exact: true }).inputValue(), '');
         assert.match(await cardFor(store).innerText(), /Produção pendente/);
       }
       assert.ok(requests.every(request => request.method === 'GET'), 'Opening the integration must not save or contact the provider.');
+      await save(stores[0], '', 200, stores[0].portal);
+      const portalOnly = (await api('/admin/ifood/stores')).stores;
+      assertPending(portalOnly);
+      assert.ok(portalOnly.every(row => row.merchant_id === null), 'A numeric Portal ID must not be treated as a Merchant UUID.');
+      assert.deepEqual(portalOnly.map(row => row.portal_id), [stores[0].portal, null, null]);
       await save(stores[0], stores[0].merchant);
-      await save(stores[1], stores[1].merchant);
+      assert.equal(await cardFor(stores[0]).getByLabel('ID numérico no Portal do Parceiro', { exact: true }).inputValue(), stores[0].portal);
+      await save(stores[1], stores[1].merchant, 200, stores[1].portal);
       const twoSaved = (await api('/admin/ifood/stores')).stores;
       assertPending(twoSaved);
       assert.deepEqual(twoSaved.map(row => row.merchant_id), [stores[0].merchant, stores[1].merchant, null]);
+      assert.deepEqual(twoSaved.map(row => row.portal_id), [stores[0].portal, stores[1].portal, null]);
       assert.equal(await cardFor(stores[2]).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), '');
-      await save(stores[2], stores[0].merchant, 409);
+      assert.equal(await cardFor(stores[2]).getByLabel('ID numérico no Portal do Parceiro', { exact: true }).inputValue(), '');
+      await save(stores[2], stores[0].merchant, 409, stores[2].portal);
       assert.equal(await cardFor(stores[2]).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), stores[0].merchant, 'A rejected duplicate must remain editable.');
+      assert.equal(await cardFor(stores[2]).getByLabel('ID numérico no Portal do Parceiro', { exact: true }).inputValue(), stores[2].portal, 'An error must preserve the other field for correction.');
       assert.deepEqual((await api('/admin/ifood/stores')).stores.map(row => row.merchant_id), [stores[0].merchant, stores[1].merchant, null]);
-      await save(stores[2], stores[2].merchant);
+      await save(stores[2], stores[2].merchant, 409, stores[0].portal);
+      assert.equal(await cardFor(stores[2]).getByLabel('ID numérico no Portal do Parceiro', { exact: true }).inputValue(), stores[0].portal, 'A rejected numeric duplicate must remain editable.');
+      assert.equal(await cardFor(stores[2]).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), stores[2].merchant);
+      assert.deepEqual((await api('/admin/ifood/stores')).stores.map(row => row.portal_id), [stores[0].portal, stores[1].portal, null]);
+      await save(stores[2], stores[2].merchant, 200, stores[2].portal);
       assert.deepEqual((await api('/admin/ifood/stores')).stores.map(row => row.merchant_id), stores.map(row => row.merchant));
+      assert.deepEqual((await api('/admin/ifood/stores')).stores.map(row => row.portal_id), stores.map(row => row.portal));
       await save(stores[2], '');
+      const clearedUUID = (await api('/admin/ifood/stores')).stores[2];
+      assert.equal(clearedUUID.merchant_id, null);
+      assert.equal(clearedUUID.portal_id, stores[2].portal, 'Clearing a Merchant UUID must preserve the numeric Portal ID.');
+      await save(stores[2], '', 200, '');
       await view('dashboard');
       await view('integrations');
       for (const [index, store] of stores.entries()) {
         assert.equal(await cardFor(store).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), index < 2 ? store.merchant : '');
+        assert.equal(await cardFor(store).getByLabel('ID numérico no Portal do Parceiro', { exact: true }).inputValue(), index < 2 ? store.portal : '');
         assert.match(await cardFor(store).innerText(), /Produção pendente/);
       }
       await page.setViewportSize({ width: 320, height: 740 });
       await panel.getByRole('heading', { name: 'iFood · três lojas reais', exact: true }).scrollIntoViewIfNeeded();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Store identification overflows at 320px.');
       await capture('ifood-stores-mobile');
+      if (process.env.SAHARA_LAYOUT_CAPTURE_DIR) {
+        await panel.screenshot({ path: path.join(path.resolve(process.env.SAHARA_LAYOUT_CAPTURE_DIR), 'ifood-stores-mobile-panel.png'), style: '.topbar { visibility: hidden !important; }' });
+      }
       await page.setViewportSize({ width: 1280, height: 900 });
       const saved = (await api('/admin/ifood/stores')).stores;
       assertPending(saved);
       assert.deepEqual(saved.map(row => row.merchant_id), [stores[0].merchant, stores[1].merchant, null]);
+      assert.deepEqual(saved.map(row => row.portal_id), [stores[0].portal, stores[1].portal, null]);
       assert.deepEqual((await api('/catalog')).products, catalogBefore, 'Identifying a store must not copy or change products and prices.');
       assert.deepEqual(await api('/admin/ifood'), integrationBefore, 'Store registration must not change the existing test integration.');
       const mutations = requests.filter(request => request.method !== 'GET');
-      assert.equal(mutations.length, 5);
+      assert.equal(mutations.length, 8);
       assert.ok(mutations.every(request => request.method === 'PATCH' && stores.some(store => request.endpoint === `/api/admin/ifood/stores/${store.id}`)), 'Saving identities must not activate connection checks or order imports.');
       for (const request of mutations) assert.equal(request.headers['x-sahara-csrf'], csrf);
       assert.deepEqual(mutations.map(request => request.data), [
-        { merchant_id: stores[0].merchant }, { merchant_id: stores[1].merchant },
-        { merchant_id: stores[0].merchant }, { merchant_id: stores[2].merchant }, { merchant_id: null },
+        { merchant_id: null, portal_id: stores[0].portal },
+        { merchant_id: stores[0].merchant, portal_id: stores[0].portal },
+        { merchant_id: stores[1].merchant, portal_id: stores[1].portal },
+        { merchant_id: stores[0].merchant, portal_id: stores[2].portal },
+        { merchant_id: stores[2].merchant, portal_id: stores[0].portal },
+        { merchant_id: stores[2].merchant, portal_id: stores[2].portal },
+        { merchant_id: null, portal_id: stores[2].portal },
+        { merchant_id: null, portal_id: null },
       ]);
     } finally {
       page.removeListener('request', observe);
@@ -370,7 +402,6 @@ async function run() {
     assert.match(await page.locator('.order-total').innerText(), /7,20/);
     assert.equal(order.status, 'preparing');
     await page.waitForFunction(() => document.querySelectorAll('.order-progress .order-stage').length === 4);
-    assert.equal(await page.locator('.order-progress .order-stage').count(), 4);
     await capture('orders-desktop');
     customer = (await api('/admin/customers')).customers.find(row => row.phone === '44999991111');
     assert.equal(customer.points, 0);

@@ -13,6 +13,12 @@ aplicativos de teste. A conexão real exige aplicativo de produção homologado,
 autorização de cada loja e implementação/validação do fluxo de pedidos reais.
 O cadastro preparatório não publica cardápios nem consulta o iFood.
 
+O **ID numérico no Portal do Parceiro** é guardado em um campo separado, como
+referência para identificar cada estabelecimento. Esse número, exibido em
+**Escolher loja**, não preenche o campo Merchant UUID nem autoriza a integração.
+Ambos os campos são opcionais e podem ser atualizados individualmente pela API;
+um campo omitido em uma atualização conserva o valor anterior.
+
 Os identificadores são únicos entre os três cadastros. IDs de teste conhecidos
 ou configurados como teste no servidor são rejeitados. Reiniciar ou publicar o
 serviço preserva os valores já salvos. O cadastro usa login administrativo,
