@@ -73,7 +73,7 @@ async function newPage(options = {}) {
       return window.__popup;
     };
   });
-  await context.route('**/system-config.js*', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: `window.SaharaSystemConfig = { apiBase: ${JSON.stringify(options.apiBase || '')} };` }));
+  await context.route('**/system-config.js*', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: `window.SaharaSystemConfig = Object.freeze({ apiBase: ${JSON.stringify(options.apiBase || '')} });` }));
   await context.route('**/api/catalog', route => route.fulfill({ status: 200, json: { products: catalogFixture } }));
   await page.goto(`${baseURL}/index.html`, { waitUntil: 'load' });
   if (!await page.evaluate(() => Boolean(window.saharaOrdering))) {
@@ -85,7 +85,7 @@ async function newPage(options = {}) {
   await page.waitForFunction(() => Boolean(window.saharaOrdering && window.saharaCheckout));
   if (options.apiBase) await page.waitForFunction(() => window.saharaCheckout.ready());
   await page.evaluate(apiBase => {
-    window.SaharaSystemConfig = { ...(window.SaharaSystemConfig || {}), apiBase };
+    window.SaharaSystemConfig = Object.freeze({ ...(window.SaharaSystemConfig || {}), apiBase });
   }, options.apiBase || '');
   return { page, context, errors };
 }
@@ -292,6 +292,9 @@ async function run() {
     await page.locator('#checkout').click();
     await page.waitForFunction(() => document.querySelector('#order-status').textContent.includes('Os preços do cardápio mudaram'));
     assert.equal(submitted.expected_subtotal_cents, 800);
+    assert.equal(await page.evaluate(() => Object.isFrozen(window.SaharaSystemConfig)), true);
+    assert.equal(await page.evaluate(() => Object.hasOwn(window.SaharaSystemConfig, 'priceConfirmation')), false);
+    assert.equal(await page.evaluate(() => window.saharaCatalogLive.priceConfirmation), true);
   }, { apiBase: '/api' });
   await test('A product paused during checkout is removed and the customer sees the reason', async page => {
     let paused = false;

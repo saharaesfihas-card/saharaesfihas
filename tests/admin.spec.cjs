@@ -282,6 +282,7 @@ async function run() {
     order = (await api('/admin/orders')).orders[0]; assert.equal(order.source, 'pdv'); assert.equal(order.items[0].price_cents, 400);
     assert.match(await page.locator('.order-total').innerText(), /7,20/);
     assert.equal(order.status, 'preparing');
+    await page.waitForFunction(() => document.querySelectorAll('.order-progress .order-stage').length === 4);
     assert.equal(await page.locator('.order-progress .order-stage').count(), 4);
     await capture('orders-desktop');
     customer = (await api('/admin/customers')).customers.find(row => row.phone === '44999991111');

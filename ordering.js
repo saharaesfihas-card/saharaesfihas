@@ -108,7 +108,7 @@
       items: prepared.items, customer: prepared.customer, delivery: prepared.delivery,
       payment_method: prepared.paymentMethod, notes: prepared.notes,
       requested_for: null, coupon_code: null,
-      ...(window.SaharaSystemConfig?.priceConfirmation ? { expected_subtotal_cents: prepared.totalCents } : {}),
+      ...(window.saharaCatalogLive?.priceConfirmation ? { expected_subtotal_cents: prepared.totalCents } : {}),
     };
     const fingerprint = JSON.stringify({ apiBase: configuration.url, payload });
     if (!attempt || attempt.fingerprint !== fingerprint) {

@@ -16,6 +16,7 @@
   let pending = false;
   let fingerprint = '';
   let removedNotice = '';
+  let priceConfirmation = false;
   async function refresh() {
     if (pending) return;
     pending = true;
@@ -29,7 +30,7 @@
           !Number.isSafeInteger(product.price_cents) || product.price_cents < 0 ||
           (product.available !== undefined && typeof product.available !== 'boolean'))) throw new Error();
       const next = JSON.stringify(data.products);
-      window.SaharaSystemConfig.priceConfirmation = data.price_confirmation === true;
+      priceConfirmation = data.price_confirmation === true;
       if (next !== fingerprint) {
         const removed = checkout.applyCatalog(data.products);
         fingerprint = next;
@@ -42,7 +43,7 @@
       status.textContent = checkout.ready() ? 'Não foi possível atualizar o cardápio agora. A disponibilidade será conferida ao finalizar o pedido.' : 'Não foi possível carregar o cardápio. Tentando novamente…';
     } finally { clearTimeout(timeout); pending = false; }
   }
-  window.saharaCatalogLive = { refresh };
+  window.saharaCatalogLive = { refresh, get priceConfirmation() { return priceConfirmation; } };
   refresh();
   setInterval(() => { if (!document.hidden) refresh(); }, 3000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
