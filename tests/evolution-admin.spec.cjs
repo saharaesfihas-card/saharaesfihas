@@ -31,6 +31,14 @@ let ifoodResult = { state: 'verified', message: 'Autenticação e acesso à loja
 let ifoodImport = { import_available: false, automatic: false, last_sync: null, pending_ack: 0 };
 let ifoodImportResult = { state: 'imported', message: 'Pedidos de teste salvos no PDV. Os eventos foram confirmados após a gravação.', imported: 1, acknowledged: 1, pending_ack: 0 };
 let ifoodImportError, fixtureOrders = [];
+const ifoodStores = {
+  stores: [
+    ['esfihas-44', 'Esfihas 44'],
+    ['sahara-esfihas-shawarma', 'Sahara Esfihas e Shawarma'],
+    ['maktub-esfihas', 'Maktub Esfihas'],
+  ].map(([id, name]) => ({ id, name, merchant_id: null, environment: 'production', connection_state: 'production_pending', catalog_state: 'pending', import_available: false })),
+  message: 'Os dados de cada loja são independentes. A conexão de produção continua pendente.',
+};
 
 async function check(name, action) { await action(); checks++; process.stdout.write(`✓ ${name}\n`); }
 async function render(waitWhatsApp = true) {
@@ -97,6 +105,7 @@ async function start() {
     }
     if (method !== 'GET') assert.equal(request.headers()['x-sahara-csrf'], csrf, `${endpoint} must use the authenticated CSRF token`);
     if (endpoint === '/api/admin/ifood') { assert.equal(method, 'GET'); return reply(ifoodStatus); }
+    if (endpoint === '/api/admin/ifood/stores') { assert.equal(method, 'GET'); return reply(ifoodStores); }
     if (endpoint === '/api/admin/ifood/check') { assert.equal(method, 'POST'); assert.deepEqual(data, {}); return reply(ifoodResult); }
     if (endpoint === '/api/admin/ifood/import') {
       if (method === 'GET') return reply(ifoodImport);
@@ -396,7 +405,7 @@ async function run() {
     delete dashboard.ai;
     await render();
     assert.equal(await page.getByRole('button', { name: 'Verificar IA', exact: true }).count(), 1);
-    assert.equal(await page.locator('#screen > .panel').first().getByRole('heading', { name: 'Inteligência artificial no WhatsApp', exact: true }).count(), 1);
+    assert.equal(await page.locator('#screen > .panel').filter({ has: page.getByRole('heading', { name: 'Inteligência artificial no WhatsApp', exact: true }) }).count(), 1);
     aiCheck = { state: 'disabled', message: 'A IA está desativada. Configure SAHARA_AI_ENABLED=1 no PDV para ativar.' };
     await page.getByRole('button', { name: 'Verificar IA', exact: true }).click();
     await page.getByText(aiCheck.message, { exact: true }).waitFor();

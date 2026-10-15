@@ -1,4 +1,35 @@
-# iFood: conexão e importação da loja de teste
+# iFood: loja de teste e preparação das lojas reais
+
+## Três lojas reais
+
+Em **Integrações → iFood · três lojas reais**, o PDV mantém cadastros privados
+separados para **Esfihas 44**, **Sahara Esfihas e Shawarma** e **Maktub Esfihas**.
+O proprietário confirmou que os produtos e preços diferem entre elas.
+
+Cada cadastro aceita o Merchant UUID da respectiva loja real, que pode ficar em
+branco até ser identificado. Salvar esse identificador mantém a situação
+**Produção pendente**. A conta mostrada pelo proprietário contém somente
+aplicativos de teste. A conexão real exige aplicativo de produção homologado,
+autorização de cada loja e implementação/validação do fluxo de pedidos reais.
+O cadastro preparatório não publica cardápios nem consulta o iFood.
+
+Os identificadores são únicos entre os três cadastros. IDs de teste conhecidos
+ou configurados como teste no servidor são rejeitados. Reiniciar ou publicar o
+serviço preserva os valores já salvos. O cadastro usa login administrativo,
+CSRF e validação de origem, e permanece fora do catálogo público.
+
+Os cardápios continuam aguardando associação por loja. Ainda é necessário
+confirmar qual loja receberá o catálogo do site Sahara e obter os produtos,
+preços e fotos das demais. Não há cópia automática de itens, preços ou promoções
+entre as lojas. A área de importação de teste abaixo conserva a configuração
+existente; cadastrar uma loja real não ativa a importação de seus pedidos.
+
+Para concluir o trabalho: identificar os três Merchant UUIDs e catálogos; obter
+as permissões de produção para Order/Events e catálogo; implementar o roteamento
+por loja, sincronização de etapas e publicação de catálogo conforme os contratos
+oficiais; então validar a operação de cada loja antes da ativação.
+
+## Importação de teste disponível
 
 O PDV permite verificar Client Credentials e importar novos pedidos de delivery
 da loja de teste. Os pedidos aparecem em **Pedidos e cozinha**, com identificação

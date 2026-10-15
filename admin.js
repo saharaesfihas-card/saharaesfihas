@@ -903,7 +903,71 @@
       el('p', 'Esta verificação consulta apenas a autenticação e a loja.', 'help'),
       el('h3', 'Pedidos da loja de teste'), importButton, importStatus, importCounters, automaticStatus,
       el('p', 'Importa novos pedidos de delivery com os valores do iFood e confirma os eventos após salvar. Os pedidos aparecem em Pedidos e cozinha como testes. Etapas, cancelamentos, recebimentos e entregas devem ser gerenciados no Gestor do iFood. Loja real, sincronização das etapas e Entrega Fácil continuam pendentes.', 'help'));
-    screen.append(aiPanel, ifoodPanel, p, section);
+    const storesPanel = panel('iFood · três lojas reais', 'Cada loja terá seu próprio cardápio e seus preços. A conexão de produção depende da homologação do aplicativo e da autorização de cada loja no iFood.');
+    storesPanel.classList.add('ifood-stores-panel'); storesPanel.setAttribute('aria-label', 'Lojas reais no iFood');
+    const storesStatus = el('p', 'Carregando as lojas…', 'help');
+    storesStatus.setAttribute('role', 'status'); storesStatus.setAttribute('aria-live', 'polite');
+    const storeCards = el('div');
+    let savingStores = 0;
+    function renderStore(store) {
+      const card = el('section', undefined, 'integration ifood-store-card'); card.dataset.storeId = store.id;
+      const heading = el('h3', store.name); heading.append(badge('Produção pendente', 'pending'));
+      card.append(heading, el('p', 'Cardápio próprio · produtos e preços ainda não vinculados.', 'help'));
+      const form = el('form');
+      const wrap = el('div', undefined, 'field');
+      const label = el('label', 'ID da loja no iFood (Merchant UUID)');
+      const input = el('input'); input.name = 'merchant_id'; input.type = 'text'; input.maxLength = 100;
+      input.id = `ifood-store-${store.id}-merchant`; label.htmlFor = input.id;
+      input.value = store.merchant_id || ''; input.autocomplete = 'off'; input.spellcheck = false;
+      input.placeholder = 'UUID da loja real (opcional)';
+      const hint = el('p', 'Use o identificador da loja real, diferente do ID da loja de teste.', 'help');
+      hint.id = `${input.id}-help`; input.setAttribute('aria-describedby', hint.id);
+      wrap.append(label, input, hint);
+      const save = el('button', 'Salvar identificação', 'small-button'); save.type = 'submit';
+      const status = el('p', store.merchant_id ? 'Identificação salva. Conexão de produção pendente.' : 'Aguardando a identificação da loja real.', 'help ifood-store-status');
+      status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+      const actions = el('div', undefined, 'form-actions'); actions.append(save, status);
+      form.append(wrap, actions); card.append(form);
+      form.addEventListener('submit', async event => {
+        event.preventDefault(); if (save.disabled) return;
+        savingStores++; refreshStoresButton.disabled = true;
+        save.disabled = true; input.disabled = true; form.setAttribute('aria-busy', 'true');
+        status.classList.remove('danger-text'); status.textContent = 'Salvando a identificação…';
+        try {
+          const result = await api(`/admin/ifood/stores/${encodeURIComponent(store.id)}`, { method: 'PATCH', body: { merchant_id: input.value.trim() || null } });
+          if (generation !== state.generation || !state.csrf) return;
+          const saved = list(result, 'stores').find(item => item.id === store.id);
+          if (!saved) throw new Error('Não foi possível confirmar o cadastro. Atualize as lojas para conferir.');
+          input.value = saved.merchant_id || ''; input.removeAttribute('aria-invalid');
+          status.textContent = saved.merchant_id ? 'Identificação salva. Conexão de produção pendente.' : 'Identificação removida. Conexão de produção pendente.';
+        } catch (error) {
+          if (generation === state.generation) {
+            status.textContent = error.message; status.classList.add('danger-text');
+          }
+        } finally {
+          savingStores--; refreshStoresButton.disabled = savingStores > 0;
+          save.disabled = false; input.disabled = false; form.setAttribute('aria-busy', 'false');
+        }
+      });
+      return card;
+    }
+    async function refreshStores() {
+      if (savingStores) return;
+      refreshStoresButton.disabled = true; storeCards.inert = true;
+      storesStatus.textContent = 'Carregando as lojas…';
+      try {
+        const result = await api('/admin/ifood/stores');
+        if (generation !== state.generation || !state.csrf) return;
+        storeCards.replaceChildren(...list(result, 'stores').map(renderStore));
+        storesStatus.textContent = result.message;
+      } catch (error) { if (generation === state.generation) storesStatus.textContent = error.message; }
+      finally { storeCards.inert = false; refreshStoresButton.disabled = savingStores > 0; }
+    }
+    const refreshStoresButton = button('Atualizar lojas do iFood', refreshStores);
+    storesPanel.append(el('p', 'Nesta etapa, o PDV guarda a identificação das lojas. A publicação dos cardápios e o recebimento de pedidos reais continuam pendentes.', 'help'),
+      storesStatus, storeCards, refreshStoresButton);
+    screen.append(storesPanel, aiPanel, ifoodPanel, p, section);
+    void refreshStores();
     void refreshIFood();
     void loadWhatsAppSection(section, generation);
   }

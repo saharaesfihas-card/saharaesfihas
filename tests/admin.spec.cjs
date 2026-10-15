@@ -115,6 +115,93 @@ async function run() {
     csrf = (await api('/admin/session')).csrf_token;
     await api('/admin/cash/sessions', { method: 'POST', data: { action: 'open' }, headers: { 'X-Sahara-CSRF': '' }, status: 403 });
   });
+  await check('Three iFood store identities stay separate, survive navigation and never enable production or copy the catalog', async () => {
+    const stores = [
+      { id: 'esfihas-44', name: 'Esfihas 44', merchant: '11111111-1111-4111-8111-111111111111' },
+      { id: 'sahara-esfihas-shawarma', name: 'Sahara Esfihas e Shawarma', merchant: '22222222-2222-4222-8222-222222222222' },
+      { id: 'maktub-esfihas', name: 'Maktub Esfihas', merchant: '33333333-3333-4333-8333-333333333333' },
+    ]; // Fictitious UUIDs: this test uses only its disposable backend.
+    const catalogBefore = (await api('/catalog')).products;
+    const integrationBefore = await api('/admin/ifood');
+    const initial = await api('/admin/ifood/stores');
+    const requests = [];
+    const observe = request => {
+      if (new URL(request.url()).pathname.startsWith('/api/admin/ifood')) {
+        requests.push({ endpoint: new URL(request.url()).pathname, method: request.method(), data: request.postDataJSON(), headers: request.headers() });
+      }
+    };
+    page.on('request', observe);
+    const cardFor = store => page.locator(`.ifood-store-card[data-store-id="${store.id}"]`);
+    const assertPending = rows => {
+      assert.deepEqual(rows.map(row => ({ id: row.id, name: row.name })), stores.map(({ id, name }) => ({ id, name })));
+      assert.ok(rows.every(row => row.environment === 'production' && row.connection_state === 'production_pending' && row.catalog_state === 'pending' && row.import_available === false));
+    };
+    const save = async (store, merchant, status = 200) => {
+      const card = cardFor(store);
+      await card.getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).fill(merchant);
+      const received = page.waitForResponse(response => response.url().endsWith(`/api/admin/ifood/stores/${store.id}`) && response.request().method() === 'PATCH');
+      await card.getByRole('button', { name: 'Salvar identificação', exact: true }).click();
+      const response = await received;
+      const body = await response.json();
+      assert.equal(response.status(), status, JSON.stringify(body));
+      await card.locator('.ifood-store-status').filter({ hasText: status === 200 ? /salv|removid/i : body.detail }).waitFor();
+      return body;
+    };
+    try {
+      assertPending(initial.stores);
+      assert.ok(initial.stores.every(row => row.merchant_id === null));
+      await view('integrations');
+      const panel = page.getByRole('region', { name: 'Lojas reais no iFood', exact: true });
+      await panel.getByRole('heading', { name: 'iFood · três lojas reais', exact: true }).waitFor();
+      await panel.locator('.ifood-store-card').nth(2).waitFor();
+      assert.equal(await panel.locator('.ifood-store-card').count(), 3);
+      for (const store of stores) {
+        await cardFor(store).getByRole('heading', { name: store.name }).waitFor();
+        assert.equal(await cardFor(store).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), '');
+        assert.match(await cardFor(store).innerText(), /Produção pendente/);
+      }
+      assert.ok(requests.every(request => request.method === 'GET'), 'Opening the integration must not save or contact the provider.');
+      await save(stores[0], stores[0].merchant);
+      await save(stores[1], stores[1].merchant);
+      const twoSaved = (await api('/admin/ifood/stores')).stores;
+      assertPending(twoSaved);
+      assert.deepEqual(twoSaved.map(row => row.merchant_id), [stores[0].merchant, stores[1].merchant, null]);
+      assert.equal(await cardFor(stores[2]).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), '');
+      await save(stores[2], stores[0].merchant, 409);
+      assert.equal(await cardFor(stores[2]).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), stores[0].merchant, 'A rejected duplicate must remain editable.');
+      assert.deepEqual((await api('/admin/ifood/stores')).stores.map(row => row.merchant_id), [stores[0].merchant, stores[1].merchant, null]);
+      await save(stores[2], stores[2].merchant);
+      assert.deepEqual((await api('/admin/ifood/stores')).stores.map(row => row.merchant_id), stores.map(row => row.merchant));
+      await save(stores[2], '');
+      await view('dashboard');
+      await view('integrations');
+      for (const [index, store] of stores.entries()) {
+        assert.equal(await cardFor(store).getByLabel('ID da loja no iFood (Merchant UUID)', { exact: true }).inputValue(), index < 2 ? store.merchant : '');
+        assert.match(await cardFor(store).innerText(), /Produção pendente/);
+      }
+      await page.setViewportSize({ width: 320, height: 740 });
+      await panel.getByRole('heading', { name: 'iFood · três lojas reais', exact: true }).scrollIntoViewIfNeeded();
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Store identification overflows at 320px.');
+      await capture('ifood-stores-mobile');
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const saved = (await api('/admin/ifood/stores')).stores;
+      assertPending(saved);
+      assert.deepEqual(saved.map(row => row.merchant_id), [stores[0].merchant, stores[1].merchant, null]);
+      assert.deepEqual((await api('/catalog')).products, catalogBefore, 'Identifying a store must not copy or change products and prices.');
+      assert.deepEqual(await api('/admin/ifood'), integrationBefore, 'Store registration must not change the existing test integration.');
+      const mutations = requests.filter(request => request.method !== 'GET');
+      assert.equal(mutations.length, 5);
+      assert.ok(mutations.every(request => request.method === 'PATCH' && stores.some(store => request.endpoint === `/api/admin/ifood/stores/${store.id}`)), 'Saving identities must not activate connection checks or order imports.');
+      for (const request of mutations) assert.equal(request.headers['x-sahara-csrf'], csrf);
+      assert.deepEqual(mutations.map(request => request.data), [
+        { merchant_id: stores[0].merchant }, { merchant_id: stores[1].merchant },
+        { merchant_id: stores[0].merchant }, { merchant_id: stores[2].merchant }, { merchant_id: null },
+      ]);
+    } finally {
+      page.removeListener('request', observe);
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
+  });
   await check('Weekly promotions start paused and can be programmed independently of product availability', async () => {
     await view('menu');
     const initial = await api('/admin/product-promotions');
