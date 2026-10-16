@@ -56,7 +56,7 @@ class KeyInput(EmptyInput):
 
 
 class InterruptionInput(KeyInput):
-    description: str = Field(min_length=1, max_length=512)
+    description: str = Field(min_length=1, max_length=450)
     start: datetime
     end: datetime
 
@@ -131,7 +131,7 @@ def reserve(request, api, key, kind, payload, parent_id=None, resource_id=None):
             return None, result('unresolved', operation=public_operation(pending))
         identifier, stamp = str(uuid4()), utcnow()
         if kind == 'create_interruption':
-            payload = {**payload, 'id': identifier}
+            payload = {**payload, 'id': identifier, 'description': payload['description'] + ' [Sahara ' + identifier + ']'}
             encoded = encode(payload)
         conn.execute('INSERT INTO ifood_merchant_operations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
                      (identifier, api.scope, str(key), kind, parent_id, resource_id, encoded,
@@ -149,13 +149,27 @@ def finish(request, api, row, state, detail=None, resource_id=None):
     return result(saved['state'], operation=public_operation(saved), **metadata(api))
 
 
+def parsed_date(value):
+    return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
 def date_equivalent(first, second):
     try:
-        a = datetime.fromisoformat(first.replace('Z', '+00:00'))
-        b = datetime.fromisoformat(second.replace('Z', '+00:00'))
-        return a.tzinfo is not None and b.tzinfo is not None and a == b
+        a, b = parsed_date(first), parsed_date(second)
+        # Observed provider roundtrip: UTC payloads return ISO timestamps without
+        # an offset, at millisecond precision. Compare those to the UTC intention;
+        # keep unowned read data raw rather than assigning it a display timezone.
+        a = a.astimezone(timezone.utc).replace(tzinfo=None) if a.tzinfo else a
+        b = b.astimezone(timezone.utc).replace(tzinfo=None) if b.tzinfo else b
+        return a.replace(microsecond=a.microsecond // 1000 * 1000) == b.replace(microsecond=b.microsecond // 1000 * 1000)
     except (AttributeError, ValueError, TypeError):
         return False
+
+
+def confirmed_pause(value, intended):
+    # Only a matching response for our own intention gets a known display zone.
+    return {**value, 'provider_start': value['start'], 'provider_end': value['end'],
+            'start': intended['start'], 'end': intended['end']}
 
 
 def valid_pause(value):
@@ -225,19 +239,20 @@ def create_pause(request, body):
             return previous
     except ifood.ProviderError as error:
         return result(error.state)
+    intended = json.loads(row['request_json'])
     returned = False
     try:
         api.unchanged()
-        data = provider(api, 'POST', '/interruptions', payload=json.loads(row['request_json']),
+        data = provider(api, 'POST', '/interruptions', payload=intended,
                         statuses=(201,), expected=dict)
         returned = True
         created = valid_pause(data)
-        if not matching_pause(created, payload):
+        if not matching_pause(created, intended):
             error = ifood.ProviderError('response', 'merchant_action')
             error.uncertain = True
             raise error
         api.unchanged()
-        return finish(request, api, row, 'confirmed', {'interruption': created}, created['id'])
+        return finish(request, api, row, 'confirmed', {'interruption': confirmed_pause(created, intended)}, created['id'])
     except ifood.ProviderError as error:
         if returned:
             error.uncertain = True
@@ -289,9 +304,15 @@ def reconcile(request, operation_id):
         api.unchanged()
         intended = json.loads(row['request_json'])
         if row['kind'] == 'create_interruption':
-            matches = [item for item in pauses if item['id'] == intended['id'] and matching_pause(item, intended)]
+            matches = [item for item in pauses if matching_pause(item, intended)]
+            # The provider assigns its own ID, even when POST includes an ID.
+            # New intentions carry an unpredictable marker in the description.
+            # A manual reconciliation of older intentions requires a unique
+            # exact description/UTC-millisecond interval, never an arbitrary ID.
+            marked = intended['description'].endswith(' [Sahara ' + row['id'] + ']')
             if len(matches) == 1:
-                return finish(request, api, row, 'confirmed', {'interruption': matches[0], 'reconciled': True}, matches[0]['id'])
+                return finish(request, api, row, 'confirmed', {'interruption': confirmed_pause(matches[0], intended),
+                    'reconciled': True, 'correlation': 'description_marker' if marked else 'legacy_unique_fields'}, matches[0]['id'])
         elif row['kind'] == 'remove_interruption' and not any(item['id'] == row['resource_id'] for item in pauses):
             return finish(request, api, row, 'confirmed', {'removed': True, 'reconciled': True})
         return finish(request, api, row, 'uncertain', {'reconciled': True})

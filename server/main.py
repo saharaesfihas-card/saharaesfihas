@@ -154,6 +154,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         ifood_merchant_actions.initialize(conn)
         ifood_catalog.initialize(conn)
         ifood_order_actions.initialize(conn)
+        ifood_homologation_profile.initialize(conn)
         for product in catalog:
             conn.execute('INSERT INTO products(id,name,category,price_cents) VALUES(?,?,?,?) '
                          'ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,price_cents=excluded.price_cents',

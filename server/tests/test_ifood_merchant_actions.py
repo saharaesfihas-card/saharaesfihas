@@ -1,5 +1,6 @@
 """Pausas de homologação isoladas, com transporte do iFood simulado."""
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from io import BytesIO
 import json
 import os
@@ -214,6 +215,79 @@ class MerchantActionsTests(unittest.TestCase):
         self.assertEqual(checked['state'], 'confirmed')
         self.assertEqual(self.calls[before:], [('POST', '/authentication/v1.0/oauth/token'),
                                              ('GET', REMOTE + '/interruptions')])
+
+    def test_provider_naive_millisecond_dates_match_own_utc_intention_and_remain_raw_in_list(self):
+        def naive_dates(request, **kwargs):
+            value = self.transport(request, **kwargs)
+            if request.get_method() == 'POST' and request.full_url.endswith('/interruptions'):
+                actual = dict(self.created)
+                for field in ('start', 'end'):
+                    actual[field] = datetime.fromisoformat(actual[field]).replace(tzinfo=None).isoformat(timespec='milliseconds')
+                self.pauses = [actual]
+                return response(actual, 201)
+            return value
+        body = {**self.body(), 'start': '2030-01-01T18:00:00.123456-03:00',
+                'end': '2030-01-01T18:30:00.789654-03:00'}
+        with patch('server.ifood.evolution.open_url', side_effect=naive_dates):
+            created = self.post('/interruptions', body).json()
+            listed = self.post('/interruptions/query').json()
+        self.assertEqual(created['state'], 'confirmed')
+        pause = created['operation']['result']['interruption']
+        self.assertEqual(pause['start'], '2030-01-01T21:00:00.123456+00:00')
+        self.assertEqual(self.created['start'], pause['start'])
+        self.assertEqual(pause['provider_start'], '2030-01-01T21:00:00.123')
+        self.assertEqual(listed['interruptions'][0]['start'], pause['provider_start'])
+
+    def test_naive_provider_dates_with_different_utc_wall_clock_remain_uncertain(self):
+        def shifted(request, **kwargs):
+            value = self.transport(request, **kwargs)
+            if request.get_method() == 'POST' and request.full_url.endswith('/interruptions'):
+                actual = dict(self.created)
+                for field in ('start', 'end'):
+                    actual[field] = (datetime.fromisoformat(actual[field]).replace(tzinfo=None) + timedelta(hours=3)).isoformat()
+                return response(actual, 201)
+            return value
+        with patch('server.ifood.evolution.open_url', side_effect=shifted):
+            created = self.post('/interruptions', self.body()).json()
+        self.assertEqual(created['state'], 'uncertain')
+
+    def test_provider_assigned_id_reconciles_by_marker_and_removes_only_that_resource(self):
+        remote_id = str(uuid4())
+        def assigned_id_then_lost(request, **kwargs):
+            value = self.transport(request, **kwargs)
+            if request.get_method() == 'POST' and request.full_url.endswith('/interruptions'):
+                self.created = {**self.created, 'id': remote_id}
+                self.pauses = [self.created]
+                raise TimeoutError()
+            return value
+        with patch('server.ifood.evolution.open_url', side_effect=assigned_id_then_lost):
+            pending = self.post('/interruptions', self.body()).json()
+        local_id = pending['operation']['id']
+        self.assertNotEqual(local_id, remote_id)
+        self.assertIn(local_id, self.created['description'])
+        with patch('server.ifood.evolution.open_url', side_effect=self.transport):
+            checked = self.post('/operations/' + local_id + '/reconcile').json()
+            self.assertEqual(checked['state'], 'confirmed')
+            self.assertEqual(checked['operation']['resource_id'], remote_id)
+            self.assertEqual(checked['operation']['result']['correlation'], 'description_marker')
+            removed = self.post('/interruptions/' + local_id + '/remove', {'idempotency_key': str(uuid4())}).json()
+        self.assertEqual(removed['state'], 'confirmed')
+        self.assertEqual(self.pauses, [])
+
+    def test_ambiguous_readback_does_not_adopt_either_provider_pause(self):
+        def lost(request, **kwargs):
+            value = self.transport(request, **kwargs)
+            if request.get_method() == 'POST' and request.full_url.endswith('/interruptions'):
+                self.pauses = [{**self.created, 'id': str(uuid4())} for _ in range(2)]
+                raise TimeoutError()
+            return value
+        with patch('server.ifood.evolution.open_url', side_effect=lost):
+            pending = self.post('/interruptions', self.body()).json()
+        with patch('server.ifood.evolution.open_url', side_effect=self.transport):
+            checked = self.post('/operations/' + pending['operation']['id'] + '/reconcile').json()
+        self.assertEqual(checked['state'], 'uncertain')
+        self.assertIsNone(checked['operation']['resource_id'])
+        self.assertFalse(any(method == 'DELETE' for method, path in self.calls))
 
     def test_secret_rotation_cannot_resubmit_an_uncertain_create(self):
         body = self.body()

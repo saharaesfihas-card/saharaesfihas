@@ -127,10 +127,18 @@ O perfil preparatório da nova conta usa variáveis opcionais separadas:
 O clientId confirmado pela captura é
 `aceb55bd-caea-4f8a-9cd8-62adb5e40370`. O UUID da loja e um segredo renovado ainda
 precisam ser configurados por um meio seguro. Não obter o segredo da imagem nem
-enviá-lo pelo chat. O diagnóstico desse perfil é somente local: não autentica no
-iFood e permanece bloqueado para consultas e alterações mesmo com as variáveis
-preenchidas. Sua ativação exige implementar uma verificação independente,
-confirmar a renovação do segredo e comprovar o vínculo com a nova loja de teste.
+enviá-lo pelo chat. O proprietário informou que renovou o segredo; o valor novo
+precisa ser salvo com segurança no servidor. O GET de diagnóstico desse perfil é
+somente local. Com clientId e segredo configurados, o botão **Consultar UUID da
+loja de teste da conta nova** executa OAuth e apenas GETs de listagem/detalhes,
+sem exigir que o UUID já seja conhecido. Retorna somente UUIDs com ID coincidente
+e marcador explícito `test: "TEST"`; uma loja sem essa comprovação invalida o
+resultado inteiro. A consulta tem paginação limitada, prazo, cooldown e bloqueio
+por mudança de configuração. Não salva automaticamente o UUID nem ativa operações.
+
+A variável opcional `SAHARA_IFOOD_HOMOLOGATION_ENVIRONMENT` aceita somente `test`
+(padrão). O perfil continua bloqueado para operações de negócio. Sua ativação
+exige preparar o uso independente desse perfil e validar os fluxos/filas próprios.
 Ele não substitui as variáveis, a verificação ou a fila de eventos do importador
 anterior. Não é um perfil de produção.
 
@@ -282,7 +290,14 @@ verificação da conexão, por sua vez, exige as credenciais atuais.
 É possível consultar interrupções, criar uma pausa com descrição, início e fim
 com fuso horário, remover uma pausa criada pelo sistema e reconciliar seu
 resultado por consulta. A remoção usa a operação local registrada; não aceita
-um ID remoto livre para apagar pausas de outra origem. Uma confirmação pela API
+um ID remoto livre para apagar pausas de outra origem. O iFood atribui seu próprio
+ID à pausa. Novas criações incluem um marcador exclusivo na descrição para
+reconciliar uma resposta perdida; múltiplos resultados correspondentes mantêm o
+bloqueio. O retorno observado omite o fuso e arredonda datas para milissegundos:
+o sistema compara com a intenção UTC, conserva o retorno original e usa o fuso
+conhecido da própria intenção na exibição. Intenções da versão anterior só são
+reconciliadas manualmente por descrição e intervalo exatamente correspondentes,
+com resultado único. Uma confirmação pela API
 ainda deve ser conferida no Portal do Parceiro para o vídeo.
 
 GET `/merchant/v1.0/merchants/{merchantId}/opening-hours` permite consultar os

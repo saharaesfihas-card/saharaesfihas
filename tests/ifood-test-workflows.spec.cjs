@@ -42,6 +42,8 @@ let merchantAvailable = true, catalogAvailable = true, createState = 'confirmed'
 let merchantOperations = [], catalogOperations = [], orderAttempts = [];
 let orderFailure = false, orderLostState = null, merchantFailure = null, catalogFailure = null, held, heldPath, captured;
 let profileHTTP = 200, profileMessage = 'O perfil separado da conta nova ainda não foi configurado no servidor.';
+let profileDiscoveryAvailable = false, profileDiscoverState = 'queried';
+let profileDiscoverMessage = 'UUID da loja de teste consultado. O perfil permanece bloqueado.';
 let resources = [
   { catalog_id: CATALOG, kind: 'category', remote_id: CATEGORY, data: { name: 'Categoria criada no teste' } },
   { catalog_id: CATALOG, kind: 'item', remote_id: ITEM, item_id: ITEM, data: { name: 'Item criado no teste' } },
@@ -113,11 +115,14 @@ async function start() {
     if (url.origin !== baseURL) { external.push(url.origin); return route.abort(); }
     const reply = (data, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
     if (path === '/api/admin/orders' && method === 'GET') return reply({ orders: [fixtureOrder] });
-    if (!(path.startsWith(merchantPath + '/') || path.startsWith(catalogPath) || path.startsWith(orderPath) || path === profilePath)) return route.continue();
+    if (!(path.startsWith(merchantPath + '/') || path.startsWith(catalogPath) || path.startsWith(orderPath) || path.startsWith(profilePath))) return route.continue();
     const body = request.postDataJSON(); requests.push({ path, method, body, csrf: request.headers()['x-sahara-csrf'] });
     if (heldPath === path) { captured = true; await held; }
     if (path === profilePath) return reply({ environment: 'test', state: 'unconfigured', message: profileMessage,
-      operations_available: false, required_variables: ['SERVER_ONLY_VARIABLE'], missing: ['SERVER_ONLY_VARIABLE'] }, profileHTTP);
+      discovery_available: profileDiscoveryAvailable, operations_available: false, required_variables: ['SERVER_ONLY_VARIABLE'], missing: ['SERVER_ONLY_VARIABLE'] }, profileHTTP);
+    if (path === profilePath + '/discover') return reply({ environment: 'test', state: profileDiscoverState,
+      message: profileDiscoverMessage, operations_available: false, connection_verified: false,
+      merchants: profileDiscoverState === 'queried' ? [{ merchant_id: MID, is_test: true, name: 'IGNORED_PROVIDER_FIELD' }] : [] });
     if (path === merchantPath + '/actions') return reply(merchantReadiness());
     if (path === merchantPath + '/interruptions/query') return reply({ ...metadata, state: 'queried', message: 'Pausas consultadas.', interruptions: [{ id: 'provider-pause-id', description: marker, start: stamp, end: '2026-10-16T01:00:00Z' }] });
     if (path === merchantPath + '/opening-hours/query') return reply({ ...metadata, state: 'queried', message: 'Horários consultados.', opening_hours: [{ shifts: [{ marker }] }] });
@@ -212,7 +217,8 @@ async function run() {
     await profile().getByRole('status').filter({ hasText: profileMessage }).waitFor();
     assert.match(await profile().innerText(), /Conta nova aguarda configuração segura e confirmação da loja de teste/);
     assert.equal(await profile().locator('input, select, textarea').count(), 0);
-    assert.equal(await profile().getByRole('button').count(), 1);
+    assert.equal(await profile().getByRole('button').count(), 2);
+    assert.equal(await profile().getByRole('button', { name: 'Consultar UUID da loja de teste da conta nova', exact: true }).isDisabled(), true);
     assert.doesNotMatch(await profile().innerText(), /SERVER_ONLY_VARIABLE/);
     assert.equal(requests.filter(request => request.path === profilePath).every(request => request.method === 'GET'), true);
     const before = writes().length; profileHTTP = 503;
@@ -225,6 +231,32 @@ async function run() {
     await profile().getByRole('status').filter({ hasText: marker }).waitFor();
     assert.equal(await profile().locator('img, script').count(), 0); assert.equal(await page.evaluate(() => window.__ifoodXSS), 0);
     assert.equal(writes().length, before);
+  });
+  await check('New account UUID discovery is manual, deduplicated and never activates the profile', async () => {
+    const discover = profile().getByRole('button', { name: 'Consultar UUID da loja de teste da conta nova', exact: true });
+    assert.equal(count(profilePath + '/discover'), 0);
+    await discover.evaluate(node => node.click()); assert.equal(count(profilePath + '/discover'), 0);
+    profileDiscoveryAvailable = true;
+    await profile().getByRole('button', { name: 'Atualizar status da conta nova', exact: true }).click();
+    await profile().locator(':scope[aria-busy="false"]').waitFor(); assert.equal(await discover.isEnabled(), true);
+    assert.equal(count(profilePath + '/discover'), 0);
+    const release = hold(profilePath + '/discover');
+    await discover.click(); await waitFor(() => captured, 'Missing manual new-account discovery');
+    await discover.evaluate(node => node.click()); assert.equal(count(profilePath + '/discover'), 1); assert.equal(await discover.isDisabled(), true);
+    release(); await profile().getByRole('status').filter({ hasText: profileDiscoverMessage }).waitFor();
+    assert.match(await profile().innerText(), new RegExp(`UUID da loja de teste: ${MID}`));
+    assert.match(await profile().innerText(), /continua bloqueado para operações/);
+    assert.doesNotMatch(await profile().innerText(), /IGNORED_PROVIDER_FIELD|SERVER_ONLY_VARIABLE/);
+    const request = requests.find(value => value.path === profilePath + '/discover'); assert.deepEqual(request.body, {}); assert.ok(request.csrf);
+    assert.equal(await profile().locator('input, select, textarea, img, script').count(), 0);
+    profileDiscoverState = 'wait'; profileDiscoverMessage = 'Aguarde antes de consultar novamente.';
+    await discover.click(); await profile().getByRole('status').filter({ hasText: profileDiscoverMessage }).waitFor();
+    assert.doesNotMatch(await profile().innerText(), new RegExp(MID));
+    profileDiscoveryAvailable = false;
+    await profile().getByRole('button', { name: 'Atualizar status da conta nova', exact: true }).click();
+    await profile().locator(':scope[aria-busy="false"]').waitFor(); assert.equal(await discover.isDisabled(), true);
+    const before = count(profilePath + '/discover'); await discover.evaluate(node => node.click());
+    assert.equal(count(profilePath + '/discover'), before);
   });
   await check('Remote read queries are explicit, deduplicated and display provider text safely', async () => {
     const release = hold(merchantPath + '/interruptions/query');
@@ -249,6 +281,7 @@ async function run() {
     await merchant().getByLabel('Fim da pausa · horário deste computador', { exact: true }).fill('2026-10-16T10:30');
     await merchant().getByRole('button', { name: 'Criar pausa na loja de teste', exact: true }).click();
     await merchant().getByRole('status').filter({ hasText: 'Pausa confirmada no teste.' }).waitFor();
+    await merchant().locator(':scope[aria-busy="false"]').waitFor();
     const request = writes().find(value => value.path === merchantPath + '/interruptions');
     assert.equal(request.body.start, '2026-10-16T13:00:00.000Z'); assert.equal(request.body.end, '2026-10-16T13:30:00.000Z');
     assert.match(request.body.idempotency_key, /^[a-f0-9-]{36}$/); assert.equal('merchant_id' in request.body, false);
@@ -258,6 +291,7 @@ async function run() {
     const created = merchantOperations[0];
     await merchant().getByRole('button', { name: 'Remover esta pausa de teste', exact: true }).click();
     await merchant().getByRole('status').filter({ hasText: 'Remoção confirmada.' }).waitFor();
+    await merchant().locator(':scope[aria-busy="false"]').waitFor();
     const request = writes().at(-1); assert.equal(request.path, `${merchantPath}/interruptions/${created.id}/remove`);
     assert.notEqual(created.id, created.resource_id); assert.match(request.body.idempotency_key, /^[a-f0-9-]{36}$/);
     assert.equal(await merchant().getByRole('button', { name: 'Remover esta pausa de teste', exact: true }).count(), 0);
@@ -270,6 +304,7 @@ async function run() {
     const before = count('/interruptions');
     await merchant().getByRole('button', { name: 'Conferir esta operação no iFood', exact: true }).click();
     await merchant().getByRole('status').filter({ hasText: 'Pausa conferida sem reenvio.' }).waitFor();
+    await merchant().locator(':scope[aria-busy="false"]').waitFor();
     assert.equal(count('/interruptions'), before); assert.equal(await merchant().getByRole('button', { name: 'Criar pausa na loja de teste', exact: true }).isEnabled(), true);
     createState = 'confirmed';
   });
@@ -357,6 +392,7 @@ async function run() {
     const before = count('/items/price', 'PATCH');
     await catalog().getByRole('button', { name: 'Conferir esta alteração no iFood', exact: true }).click();
     await catalog().getByRole('status').filter({ hasText: 'Alteração conferida sem reenvio.' }).waitFor();
+    await catalog().locator(':scope[aria-busy="false"]').waitFor();
     assert.equal(count('/items/price', 'PATCH'), before); assert.equal(await catalog().getByRole('button', { name: 'Aplicar alteração individual no teste', exact: true }).isEnabled(), true);
     catalogPatchState = 'confirmed';
   });

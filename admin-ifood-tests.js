@@ -80,22 +80,52 @@
 
   function homologationProfile({ host, api, isCurrent }) {
     const panel = section('Conta nova · preparação para homologação', 'Preparação da conta nova no iFood'); host.append(panel.host);
-    let busy = false;
+    let busy = false, discoveryAvailable = false;
     const refreshButton = button('Atualizar status da conta nova', refresh);
-    panel.host.append(el('p', 'Conta nova aguarda configuração segura e confirmação da loja de teste.', 'help'), refreshButton);
+    const discoverButton = button('Consultar UUID da loja de teste da conta nova', discover);
+    const results = el('div');
+    panel.host.append(el('p', 'Conta nova aguarda configuração segura e confirmação da loja de teste. A consulta do UUID mantém este perfil bloqueado para operações.', 'help'),
+      refreshButton, discoverButton, results);
+    function update() {
+      refreshButton.disabled = busy; discoverButton.disabled = busy || !discoveryAvailable;
+      panel.host.setAttribute('aria-busy', String(busy));
+    }
     async function refresh() {
       if (!isCurrent() || busy) return;
-      busy = true; refreshButton.disabled = true; panel.host.setAttribute('aria-busy', 'true');
+      busy = true; update(); results.replaceChildren();
       try {
         const value = await api('/admin/ifood/homologation-profile');
         if (!isCurrent()) return;
+        discoveryAvailable = value?.environment === 'test' && value.discovery_available === true;
         panel.status.textContent = value?.environment === 'test' && typeof value.message === 'string'
           ? value.message : 'Não foi possível conferir o status da conta nova.';
       } catch {
-        if (isCurrent()) panel.status.textContent = 'Não foi possível consultar o status da conta nova. Atualize esta seção para conferir.';
+        if (isCurrent()) { discoveryAvailable = false; panel.status.textContent = 'Não foi possível consultar o status da conta nova. Atualize esta seção para conferir.'; }
       } finally {
         busy = false;
-        if (isCurrent()) { refreshButton.disabled = false; panel.host.setAttribute('aria-busy', 'false'); }
+        if (isCurrent()) update();
+      }
+    }
+    async function discover() {
+      if (!isCurrent() || busy || !discoveryAvailable) return;
+      busy = true; update(); results.replaceChildren(); panel.status.textContent = 'Consultando a loja de teste da conta nova no iFood…';
+      try {
+        const value = await api('/admin/ifood/homologation-profile/discover', { method: 'POST', body: {} });
+        if (!isCurrent()) return;
+        panel.status.textContent = value?.environment === 'test' && typeof value.message === 'string'
+          ? value.message : 'Não foi possível identificar a loja de teste da conta nova.';
+        if (value?.environment === 'test' && value.state === 'queried' && Array.isArray(value.merchants)) {
+          const valid = value.merchants.every(merchant => merchant?.is_test === true && typeof merchant.merchant_id === 'string'
+            && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(merchant.merchant_id));
+          if (!valid) { panel.status.textContent = 'A consulta não retornou uma lista válida de lojas de teste.'; return; }
+          for (const merchant of value.merchants) results.append(el('p', `UUID da loja de teste: ${merchant.merchant_id}`, 'help'));
+          results.append(el('p', 'Consulta concluída. O perfil da conta nova continua bloqueado para operações.', 'help'));
+        }
+      } catch {
+        if (isCurrent()) panel.status.textContent = 'Não foi possível consultar a loja de teste da conta nova. Confira a configuração segura e atualize o status.';
+      } finally {
+        busy = false;
+        if (isCurrent()) update();
       }
     }
     void refresh(); return { refresh };
@@ -105,7 +135,7 @@
     const panel = section('Pausas e horários · TESTE', 'Operações Merchant da loja de teste'); host.append(panel.host);
     const metadata = el('p', '', 'help'), resultBox = el('div'), history = el('div');
     const fields = el('div', undefined, 'form-grid');
-    const description = field('Descrição da pausa de teste'); description.input.maxLength = 512;
+    const description = field('Descrição da pausa de teste'); description.input.maxLength = 450;
     const start = field('Início da pausa · horário deste computador', 'datetime-local');
     const end = field('Fim da pausa · horário deste computador', 'datetime-local');
     fields.append(description.box, start.box, end.box);
@@ -194,6 +224,7 @@
           operations = [value.operation, ...operations.filter(operation => operation.id !== value.operation.id)];
           if (['confirmed', 'rejected'].includes(value.operation.state) && value.operation.idempotency_key === unknownKey) unknownKey = null;
         } else if (mutation && !pendingMerchant(value.state)) unknownKey = null;
+        if (value.provider_response) resultBox.append(jsonDetails('Resposta de pausas fora do formato esperado', value.provider_response));
         if (value.state === 'queried') {
           if (Array.isArray(value.interruptions)) resultBox.append(jsonDetails('Pausas retornadas pelo iFood', value.interruptions));
           if (Array.isArray(value.opening_hours)) resultBox.append(jsonDetails('Horários retornados pelo iFood', value.opening_hours));
