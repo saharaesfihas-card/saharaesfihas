@@ -23,7 +23,7 @@ RUN --mount=type=secret,id=proxy_ca \
     python -m pip install --no-cache-dir -r server/requirements.txt
 
 COPY server ./server
-COPY index.html app.js catalog-live.js address.js delivery-fees.js style.css ordering.js ordering.css pwa.js pwa.css service-worker.js system-config.js manifest.webmanifest logo-sahara.jpg esfihas.png admin.html admin.css admin.js admin-order-alerts.js ./
+COPY index.html app.js catalog-live.js address.js delivery-fees.js style.css ordering.js ordering.css pwa.js pwa.css service-worker.js system-config.js manifest.webmanifest logo-sahara.jpg esfihas.png admin.html admin.css admin.js admin-order-alerts.js admin-ifood-tests.js ./
 COPY images ./images
 COPY icons ./icons
 RUN find /app -type d -exec chmod 0755 {} + \
