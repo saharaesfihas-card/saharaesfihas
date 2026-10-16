@@ -181,13 +181,19 @@ def provider(api, method, suffix, **kwargs):
 
 
 def pause_list(api):
-    data = provider(api, 'GET', '/interruptions', expected=list)
-    if len(data) > MAX_PAUSES:
-        raise ifood.ProviderError('response', 'merchant_action')
-    pauses = [valid_pause(item) for item in data]
-    if len({item['id'] for item in pauses}) != len(pauses):
-        raise ifood.ProviderError('response', 'merchant_action')
-    return pauses
+    data = provider(api, 'GET', '/interruptions', expected=(dict, list))
+    try:
+        if not isinstance(data, list) or len(data) > MAX_PAUSES:
+            raise ifood.ProviderError('response', 'merchant_action')
+        pauses = [valid_pause(item) for item in data]
+        if len({item['id'] for item in pauses}) != len(pauses):
+            raise ifood.ProviderError('response', 'merchant_action')
+        return pauses
+    except ifood.ProviderError as error:
+        # Manual private diagnosis retains only already-sanitized bounded JSON.
+        # Reconciliation still fails closed; it never adopts malformed pauses.
+        error.pause_response = data
+        raise
 
 
 def failed_write(request, api, row, error):
@@ -206,7 +212,8 @@ def query_pauses(request):
         api.unchanged()
         return api.sanitized(result('queried', interruptions=pauses, **metadata(api)))
     except ifood.ProviderError as error:
-        return result(error.state)
+        diagnostic = {'provider_response': error.pause_response} if hasattr(error, 'pause_response') else {}
+        return result(error.state, **diagnostic)
 
 
 def create_pause(request, body):
@@ -295,8 +302,11 @@ def reconcile(request, operation_id):
 def query_hours(request):
     try:
         api = start_api(request)
-        hours = provider(api, 'GET', '/opening-hours', expected=list)
-        if len(hours) > 100 or any(not isinstance(item, dict) or not isinstance(item.get('shifts'), list) for item in hours):
+        hours = provider(api, 'GET', '/opening-hours', expected=(dict, list))
+        # Read-only display retains the provider's bounded JSON. Some responses
+        # use an object envelope; no schedule units or write schema are inferred.
+        hours = [hours] if isinstance(hours, dict) else hours
+        if len(hours) > 1000 or any(not isinstance(item, dict) for item in hours):
             raise ifood.ProviderError('response', 'merchant_action')
         api.unchanged()
         return api.sanitized(result('queried', opening_hours=hours, **metadata(api)))

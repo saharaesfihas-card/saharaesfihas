@@ -387,8 +387,20 @@ class MerchantActionsTests(unittest.TestCase):
             malformed = self.post('/interruptions/query').json()
         self.assertEqual(malformed['state'], 'response')
         self.assertNotIn('interruptions', malformed)
+        self.assertEqual(malformed['provider_response'][0]['id'], '../untrusted')
+        self.assertNotIn(SECRET, json.dumps(malformed['provider_response']))
         self.assertNotIn(SECRET, json.dumps([uncertain, malformed]))
         self.assertNotIn(TOKEN, json.dumps([uncertain, malformed]))
+
+    def test_hours_object_envelope_is_displayed_without_guessing_units(self):
+        self.hours = {'storeId': MERCHANT, 'shifts': [{'dayOfWeek': 'PROVIDER_DAY',
+                      'start': 'PROVIDER_TIME', 'duration': 999}]}
+        with patch('server.ifood.evolution.open_url', side_effect=self.transport):
+            result = self.post('/opening-hours/query').json()
+        self.assertEqual(result['state'], 'queried')
+        self.assertEqual(result['opening_hours'], [self.hours])
+        self.assertFalse(any(method in ('PUT', 'PATCH', 'POST') and '/opening-hours' in path
+                             for method, path in self.calls))
 
     def test_hours_are_read_only_without_inventing_schedule_semantics(self):
         with patch('server.ifood.evolution.open_url', side_effect=self.transport):
