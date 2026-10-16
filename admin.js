@@ -108,7 +108,7 @@
     if (!readOnly && state.csrf) headers['X-Sahara-CSRF'] = state.csrf;
     const controller = new AbortController();
     // Evolution checks may make two provider calls; pairing may make six.
-    const timeout = path === '/admin/whatsapp/connect' ? 100000 : path === '/admin/ifood/import' && method === 'POST' ? 60000 : path === '/admin/whatsapp' ? 35000 : 20000;
+    const timeout = path === '/admin/whatsapp/connect' ? 100000 : ['/admin/ifood/import', '/admin/ifood/merchant'].includes(path) && method === 'POST' ? 60000 : path === '/admin/whatsapp' ? 35000 : 20000;
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
       const response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', signal: controller.signal, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
@@ -861,8 +861,72 @@
         const result = await api('/admin/ifood/check', { method: 'POST', body: {} });
         ifoodStatus.textContent = result.message;
         void refreshIFoodImport();
+        void refreshIFoodMerchant();
       } catch (error) { ifoodStatus.textContent = error.message; throw error; }
     }); ifoodTest.disabled = true;
+    const merchantSection = el('section', undefined, 'integration ifood-merchant-panel');
+    merchantSection.setAttribute('aria-label', 'Consulta da loja de teste no iFood');
+    merchantSection.setAttribute('aria-busy', 'false');
+    const merchantStatus = el('p', 'Consultando a disponibilidade da consulta de lojas…', 'help');
+    merchantStatus.setAttribute('role', 'status'); merchantStatus.setAttribute('aria-live', 'polite');
+    const merchantData = el('div', undefined, 'ifood-merchant-data');
+    merchantData.style.minWidth = '0';
+    const merchantQuery = el('button', 'Consultar lojas e disponibilidade', 'small-button');
+    merchantQuery.type = 'button'; merchantQuery.disabled = true;
+    let merchantAvailable = false, merchantBusy = false, merchantReadinessVersion = 0;
+    const merchantCurrent = () => generation === state.generation && Boolean(state.csrf);
+    const merchantJSON = (title, value) => {
+      const details = el('details'); details.append(el('summary', title));
+      const content = el('pre', JSON.stringify(value, null, 2));
+      content.style.whiteSpace = 'pre-wrap'; content.style.overflowWrap = 'anywhere'; content.style.maxWidth = '100%';
+      details.append(content); return details;
+    };
+    async function refreshIFoodMerchant() {
+      if (merchantBusy) return;
+      const version = ++merchantReadinessVersion;
+      merchantAvailable = false; merchantQuery.disabled = true; merchantData.replaceChildren();
+      merchantStatus.textContent = 'Consultando a disponibilidade da consulta de lojas…';
+      try {
+        const result = await api('/admin/ifood/merchant');
+        if (!merchantCurrent() || version !== merchantReadinessVersion) return;
+        merchantAvailable = result.query_available === true && result.environment === 'test';
+        merchantStatus.textContent = result.message;
+      } catch (error) {
+        if (merchantCurrent() && version === merchantReadinessVersion) merchantStatus.textContent = error.message;
+      } finally {
+        if (merchantCurrent() && version === merchantReadinessVersion) merchantQuery.disabled = !merchantAvailable;
+      }
+    }
+    merchantQuery.addEventListener('click', async () => {
+      if (merchantBusy || !merchantAvailable || !merchantCurrent()) return;
+      merchantBusy = true; merchantQuery.disabled = true; merchantSection.setAttribute('aria-busy', 'true');
+      merchantData.replaceChildren(); merchantStatus.textContent = 'Consultando as lojas vinculadas, os dados e a disponibilidade no iFood…';
+      try {
+        const result = await api('/admin/ifood/merchant', { method: 'POST', body: {} });
+        if (!merchantCurrent()) return;
+        merchantStatus.textContent = result.message;
+        if (result.state !== 'queried') return;
+        if (result.environment !== 'test' || !Array.isArray(result.merchants) || !Array.isArray(result.availability) || !result.merchant || typeof result.merchant !== 'object' || Array.isArray(result.merchant)) {
+          throw new Error('O servidor devolveu uma consulta de lojas inesperada. Tente novamente.');
+        }
+        const metadata = el('p', `Consulta em: ${date(result.checked_at)} · client_id de teste: ${result.client_id || '—'} · Loja configurada: ${result.configured_merchant_id || '—'}`, 'help');
+        metadata.style.overflowWrap = 'anywhere';
+        merchantData.append(metadata, el('h4', 'Lojas vinculadas à aplicação de teste'));
+        if (result.merchants.length) {
+          const merchants = el('ul'); merchants.style.overflowWrap = 'anywhere';
+          for (const merchant of result.merchants) merchants.append(el('li', `${merchant.name || 'Loja sem nome'} · ${merchant.id || 'ID não informado'}`));
+          merchantData.append(merchants);
+        } else merchantData.append(el('p', 'Nenhuma loja retornada pelo iFood.', 'help'));
+        merchantData.append(merchantJSON('Dados completos retornados da loja configurada', result.merchant), merchantJSON('Disponibilidade retornada pelo iFood', result.availability));
+      } catch (error) {
+        if (merchantCurrent()) { merchantData.replaceChildren(); merchantStatus.textContent = error.message; }
+      } finally {
+        merchantBusy = false;
+        if (merchantCurrent()) { merchantSection.setAttribute('aria-busy', 'false'); merchantQuery.disabled = !merchantAvailable; }
+      }
+    });
+    merchantSection.append(el('h3', 'Informações e disponibilidade da loja de teste'), merchantQuery, merchantStatus, merchantData,
+      el('p', 'Consulta de teste. Homologação e integração das lojas reais pendentes.', 'help'));
     const importStatus = el('p', 'Consultando a importação de teste…', 'help');
     importStatus.setAttribute('role', 'status'); importStatus.setAttribute('aria-live', 'polite');
     const importCounters = el('p', '', 'help');
@@ -896,11 +960,13 @@
         for (const name of list(result, 'missing')) ifoodMissing.append(el('li', name));
         ifoodTest.disabled = !result.configured;
         void refreshIFoodImport();
+        void refreshIFoodMerchant();
       } catch (error) { if (generation === state.generation) ifoodStatus.textContent = error.message; }
     }
     ifoodPanel.append(ifoodStatus, ifoodMissing, button('Atualizar configuração do iFood', refreshIFood), ifoodTest,
       el('p', 'Cadastre SAHARA_IFOOD_CLIENT_ID, SAHARA_IFOOD_CLIENT_SECRET e SAHARA_IFOOD_MERCHANT_ID somente nas variáveis do servidor PDV no Render. Para esta etapa, use SAHARA_IFOOD_ENABLED=1 e SAHARA_IFOOD_ENVIRONMENT=test.', 'help'),
       el('p', 'Esta verificação consulta apenas a autenticação e a loja.', 'help'),
+      merchantSection,
       el('h3', 'Pedidos da loja de teste'), importButton, importStatus, importCounters, automaticStatus,
       el('p', 'Importa novos pedidos de delivery com os valores do iFood e confirma os eventos após salvar. Os pedidos aparecem em Pedidos e cozinha como testes. Etapas, cancelamentos, recebimentos e entregas devem ser gerenciados no Gestor do iFood. Loja real, sincronização das etapas e Entrega Fácil continuam pendentes.', 'help'));
     const storesPanel = panel('iFood · três lojas reais', 'Cada loja terá seu próprio cardápio e seus preços. A conexão de produção depende da homologação do aplicativo e da autorização de cada loja no iFood.');

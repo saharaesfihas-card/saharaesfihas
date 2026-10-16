@@ -8,8 +8,11 @@ O proprietário confirmou que os produtos e preços diferem entre elas.
 
 Cada cadastro aceita o Merchant UUID da respectiva loja real, que pode ficar em
 branco até ser identificado. Salvar esse identificador mantém a situação
-**Produção pendente**. A conta mostrada pelo proprietário contém somente
-aplicativos de teste. A conexão real exige aplicativo de produção homologado,
+**Produção pendente**. O proprietário cadastrou **Sahara PDV**, centralizado,
+na nova conta organizacional; a última tela confirmada mostra **Em desenvolvimento**.
+A nova conta também contém **Teste (C)**, centralizado, e **Teste (D)**, distribuído.
+As permissões e a loja vinculada a esses aplicativos da nova conta ainda precisam
+ser conferidas. A conexão real exige aplicativo de produção homologado,
 autorização de cada loja e implementação/validação do fluxo de pedidos reais.
 O cadastro preparatório não publica cardápios nem consulta o iFood.
 
@@ -24,9 +27,11 @@ ou configurados como teste no servidor são rejeitados. Reiniciar ou publicar o
 serviço preserva os valores já salvos. O cadastro usa login administrativo,
 CSRF e validação de origem, e permanece fora do catálogo público.
 
-Os cardápios continuam aguardando associação por loja. Ainda é necessário
-confirmar qual loja receberá o catálogo do site Sahara e obter os produtos,
-preços e fotos das demais. Não há cópia automática de itens, preços ou promoções
+O proprietário escolheu **Esfihas 44**, ID do Portal **4172927**, para receber
+os **57 produtos e preços normais do site Sahara**. Sahara Esfihas e Shawarma
+(Portal **692154**) e Maktub Esfihas (Portal **1263888**) têm cardápios próprios;
+seus produtos, preços e fotos ainda precisam ser organizados. Não há cópia
+automática de itens, preços ou promoções
 entre as lojas. A área de importação de teste abaixo conserva a configuração
 existente; cadastrar uma loja real não ativa a importação de seus pedidos.
 
@@ -34,6 +39,33 @@ Para concluir o trabalho: identificar os três Merchant UUIDs e catálogos; obte
 as permissões de produção para Order/Events e catálogo; implementar o roteamento
 por loja, sincronização de etapas e publicação de catálogo conforme os contratos
 oficiais; então validar a operação de cada loja antes da ativação.
+
+## Homologação solicitada
+
+O checklist recebido do suporte define três cenários Merchant (informações da
+loja, interrupções e horários) e três Catalog (categoria/item, grupo/dois
+complementos e alterações). Cada cenário deve ter vídeo próprio, data/hora e
+client_id do aplicativo de teste utilizado, com as conferências no Portal do
+Parceiro exigidas pelo roteiro. Os vídeos são entregues por links compartilháveis.
+Ainda não foram gravados ou enviados vídeos de homologação.
+
+O texto específico de Order orienta o wizard automático no Developer Portal.
+Os cenários reais desse wizard ainda precisam ser conferidos. A mensagem geral
+menciona Events, mas o material recebido não traz um roteiro independente desse
+módulo; sua participação deve ser conferida no portal/chamado.
+
+As referências completas de Merchant/Catalog continuam pendentes: a documentação
+oficial responde HTTP403 neste ambiente. O checklist exige os PATCH relativos
+`/items/price`, `/items/status`, `/options/price` e `/options/status`, mas não
+fornece base/versionamento, schemas ou contratos de criação, fotos, pausas e
+horários. Essas operações não estão implementadas. Pausar um produto local não
+altera o catálogo ou o funcionamento da loja no iFood.
+
+Todos os cenários de homologação devem usar loja de teste confirmada e ambiente
+isolado. Os cadastros das três lojas reais não são alvos de homologação.
+Não substituir a configuração anterior do importador pelas credenciais da nova
+conta sem confirmar o vínculo e preparar um perfil separado: a verificação e a
+fila de eventos existentes pertencem à configuração de origem.
 
 ## Importação de teste disponível
 
@@ -159,6 +191,37 @@ segundos por requisição. Respostas de eventos/detalhes limitadas a 1MiB; token
 corpos de erros do provedor não são persistidos, retornados ou escritos em logs.
 Somente dados necessários do pedido e IDs dos eventos são guardados no banco
 privado, fora da pasta publicada. O ciclo usa token efêmero, sem gravá-lo em disco.
+
+## Consulta Merchant da loja de teste
+
+Em **Integrações → iFood → Informações e disponibilidade da loja de teste**,
+o botão **Consultar lojas e disponibilidade** faz uma consulta explícita da lista
+de lojas vinculadas, dos detalhes da loja configurada e da disponibilidade
+retornada pelo iFood. O painel mostra client_id de teste, loja e data da consulta.
+Os dados detalhados e a resposta de disponibilidade aparecem em seções expansíveis
+privadas, como texto; uma falha não é apresentada como loja aberta ou fechada.
+
+GET `/api/admin/ifood/merchant` lê somente a prontidão local. POST na mesma rota,
+com objeto vazio, executa a consulta e exige login, origem válida e CSRF. O alvo
+vem do servidor e deve ser a loja de teste previamente confirmada, com ambiente
+`test` e diagnóstico de conexão verificado para a configuração atual. Não há
+seleção de loja real ou de outro destino no navegador. A consulta tem reserva
+persistente e intervalo mínimo de 30 segundos; uma execução interrompida libera
+a reserva após três minutos.
+
+As únicas operações externas desta função são a autenticação já existente e os
+GET de `/merchant/v1.0/merchants`, `/merchant/v1.0/merchants/{merchantId}` e
+`/merchant/v1.0/merchants/{merchantId}/status`. Ela não cria pausas, modifica
+horários, edita catálogos ou altera pedidos. Segredos são removidos da resposta;
+somente o estado seguro da consulta é persistido, sem armazenar a lista ou os
+detalhes completos da loja. O host, TLS e bloqueio de redirecionamento do cliente
+existente são preservados.
+
+A função usa a configuração anterior de teste que está no Render. Ela não
+comprova vínculo dos aplicativos da nova conta, autorização das três lojas reais
+ou aprovação na homologação. A execução remota precisa ser conferida no ambiente
+configurado; testes com provedor simulado não substituem essa conferência nem os
+vídeos com validação no Portal do Parceiro.
 
 Testes locais exercitam provedores simulados, banco temporário e credenciais
 fictícias. Cobrem preços distintos do catálogo, adicionais, pagamentos, janelas
