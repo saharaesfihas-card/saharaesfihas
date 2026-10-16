@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
-from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders, ifood_stores, ifood_merchant, delivery_estimates, product_promotions
+from . import core, whatsapp, whatsapp_ai, ifood, ifood_orders, ifood_stores, ifood_merchant, ifood_merchant_actions, ifood_catalog, ifood_order_actions, ifood_homologation_profile, delivery_estimates, product_promotions
 from .core import COOKIE, ROOT, db, order_dict, require_admin, utcnow, verify_password
 from .evolution import valid_url as valid_public_url
 
@@ -151,6 +151,9 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
         ifood_orders.initialize(conn)
         ifood_stores.initialize(conn)
         ifood_merchant.initialize(conn)
+        ifood_merchant_actions.initialize(conn)
+        ifood_catalog.initialize(conn)
+        ifood_order_actions.initialize(conn)
         for product in catalog:
             conn.execute('INSERT INTO products(id,name,category,price_cents) VALUES(?,?,?,?) '
                          'ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,price_cents=excluded.price_cents',
@@ -382,6 +385,10 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     app.include_router(ifood_orders.router)
     app.include_router(ifood_stores.router)
     app.include_router(ifood_merchant.router)
+    app.include_router(ifood_merchant_actions.router)
+    app.include_router(ifood_catalog.router)
+    app.include_router(ifood_order_actions.router)
+    app.include_router(ifood_homologation_profile.router)
 
     @app.get('/system-config.js')
     def system_config():
@@ -407,7 +414,7 @@ def create_app(data_dir=None, admin_password_hash=None, secure_cookie=None):
     def static_asset(asset: str):
         asset = asset or 'index.html'
         public = {'index.html', 'app.js', 'catalog-live.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'style.css', 'pwa.js', 'pwa.css',
-                  'service-worker.js', 'manifest.webmanifest', 'admin.html', 'admin.css', 'admin.js', 'admin-order-alerts.js', 'esfihas.png', 'logo-sahara.jpg'}
+                  'service-worker.js', 'manifest.webmanifest', 'admin.html', 'admin.css', 'admin.js', 'admin-order-alerts.js', 'admin-ifood-tests.js', 'esfihas.png', 'logo-sahara.jpg'}
         allowed_image = asset.startswith(('images/', 'icons/')) and Path(asset).suffix.lower() in ('.png', '.jpg', '.jpeg', '.svg', '.ico')
         if asset not in public and not allowed_image:
             raise HTTPException(404, 'Arquivo não encontrado.')

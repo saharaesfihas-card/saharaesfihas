@@ -82,7 +82,7 @@ def dashboard(request):
             'last_result': last}
 
 
-def sanitize(value, private_values):
+def sanitize(value, private_values, max_response=MAX_RESPONSE, max_nodes=10000):
     """Retém os dados JSON, removendo segredos inclusive em estruturas desconhecidas."""
     count = 0
     private_values = sorted({item for item in private_values if item}, key=len, reverse=True)
@@ -95,7 +95,7 @@ def sanitize(value, private_values):
     def visit(value, depth=0):
         nonlocal count
         count += 1
-        if depth > 20 or count > 10000:
+        if depth > 20 or count > max_nodes:
             raise ValueError()
         if isinstance(value, dict):
             return {clean_text(key): visit(item, depth + 1) for key, item in value.items()
@@ -114,7 +114,7 @@ def sanitize(value, private_values):
         raise ValueError()
 
     cleaned = visit(value)
-    if len(json.dumps(cleaned, ensure_ascii=False, allow_nan=False).encode()) > MAX_RESPONSE:
+    if len(json.dumps(cleaned, ensure_ascii=False, allow_nan=False).encode()) > max_response:
         raise ValueError()
     return cleaned
 
@@ -144,7 +144,16 @@ def query(request):
             unchanged(request, cfg, digest)
             return ifood.provider_json(URLRequest(ifood.HOST + path, headers=headers), phase, expected, limit)
 
-        merchants = read('/merchant/v1.0/merchants', 'merchants', list, 262144)
+        merchants = []
+        for page in range(1, 4):
+            suffix = '' if page == 1 else '?page=' + str(page) + '&size=100'
+            batch = read('/merchant/v1.0/merchants' + suffix, 'merchants', list, 262144)
+            merchants.extend(batch)
+            if len(batch) < 100:
+                break
+        else:
+            # Never present a bounded, truncated list as all linked shops.
+            raise ifood.ProviderError('response', 'merchants')
         if len(merchants) > 1000 or any(not isinstance(item, dict) or not ifood.identifier(item.get('id'))
                                          for item in merchants):
             raise ifood.ProviderError('response', 'merchants')

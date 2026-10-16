@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -391,6 +392,34 @@ class IFoodMerchantTests(unittest.TestCase):
             finally:
                 release.set()
             self.assertEqual(future.result().json()['state'], 'queried')
+        self.assertEqual(call.call_count, 4)
+
+    def test_linked_merchants_follow_collection_pagination_without_truncating(self):
+        self.merchants = [{'id': MERCHANT, 'name': 'Loja de teste'}] + [
+            {'id': str(UUID(int=value)), 'name': 'Loja fictícia'} for value in range(1, 100)]
+        def transport(request, **kwargs):
+            if request.full_url.endswith('/merchants?page=2&size=100'):
+                return response([{'id': str(UUID(int=100)), 'name': 'Última loja fictícia'}])
+            return self.transport(request, **kwargs)
+        with patch('server.ifood.evolution.open_url', side_effect=transport) as call:
+            result = self.post().json()
+        self.assertEqual(result['state'], 'queried')
+        self.assertEqual(len(result['merchants']), 101)
+        self.assertEqual(call.call_count, 5)
+        self.assertTrue(any(x.args[0].full_url.endswith('?page=2&size=100') for x in call.call_args_list))
+
+    def test_pagination_bound_refuses_a_potentially_incomplete_linked_shop_list(self):
+        self.merchants = [{'id': MERCHANT, 'name': 'Loja de teste'}] + [
+            {'id': str(UUID(int=value)), 'name': 'Loja fictícia'} for value in range(1, 100)]
+        def transport(request, **kwargs):
+            if '/merchants?page=' in request.full_url:
+                return response([{'id': str(UUID(int=value)), 'name': 'Loja fictícia'}
+                                 for value in range(101, 201)])
+            return self.transport(request, **kwargs)
+        with patch('server.ifood.evolution.open_url', side_effect=transport) as call:
+            result = self.post().json()
+        self.assertEqual(result['state'], 'response')
+        self.assert_no_payload(result)
         self.assertEqual(call.call_count, 4)
 
     def test_no_changes_to_business_test_import_queues_or_connection_check(self):

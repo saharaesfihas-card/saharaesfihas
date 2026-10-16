@@ -11,8 +11,10 @@ branco até ser identificado. Salvar esse identificador mantém a situação
 **Produção pendente**. O proprietário cadastrou **Sahara PDV**, centralizado,
 na nova conta organizacional; a última tela confirmada mostra **Em desenvolvimento**.
 A nova conta também contém **Teste (C)**, centralizado, e **Teste (D)**, distribuído.
-As permissões e a loja vinculada a esses aplicativos da nova conta ainda precisam
-ser conferidas. A conexão real exige aplicativo de produção homologado,
+As capturas do **Teste (C)** confirmam Order, Catalog, Events e Merchant
+habilitados, uma loja de teste com permissão **Ativa** e webhook **Desativado**.
+O Merchant UUID dessa nova loja ainda não foi identificado. A conexão real exige
+aplicativo de produção homologado,
 autorização de cada loja e implementação/validação do fluxo de pedidos reais.
 O cadastro preparatório não publica cardápios nem consulta o iFood.
 
@@ -54,18 +56,29 @@ Os cenários reais desse wizard ainda precisam ser conferidos. A mensagem geral
 menciona Events, mas o material recebido não traz um roteiro independente desse
 módulo; sua participação deve ser conferida no portal/chamado.
 
-As referências completas de Merchant/Catalog continuam pendentes: a documentação
-oficial responde HTTP403 neste ambiente. O checklist exige os PATCH relativos
-`/items/price`, `/items/status`, `/options/price` e `/options/status`, mas não
-fornece base/versionamento, schemas ou contratos de criação, fotos, pausas e
-horários. Essas operações não estão implementadas. Pausar um produto local não
-altera o catálogo ou o funcionamento da loja no iFood.
+O proprietário forneceu as quatro coleções oficiais do Postman obtidas em
+**Documentações → Collections → Restaurante**: Merchant v1.0, Catalog v2.0,
+Order v1.0 e Events v1.0. Elas permitem implementar as consultas e operações de
+teste descritas abaixo. A documentação web continua respondendo HTTP403 neste
+ambiente; as coleções recebidas são a referência disponível, não uma confirmação
+de que todos os exemplos têm schema completo.
+
+Continuam faltando definições para alterar horários e enviar/substituir fotos.
+As quatro rotas PATCH de catálogo documentam um objeto por entidade, sem contrato
+de atualização em lote exigido pelo checklist. Repetir chamadas individuais não
+comprova esse requisito. Pausar um produto local não altera o catálogo ou o
+funcionamento da loja no iFood.
 
 Todos os cenários de homologação devem usar loja de teste confirmada e ambiente
 isolado. Os cadastros das três lojas reais não são alvos de homologação.
 Não substituir a configuração anterior do importador pelas credenciais da nova
 conta sem confirmar o vínculo e preparar um perfil separado: a verificação e a
 fila de eventos existentes pertencem à configuração de origem.
+
+Os recursos implementados não equivalem a cenários homologados. Ainda é necessário
+executá-los na loja de teste, conferir os resultados no Portal do Parceiro,
+resolver as definições pendentes e gravar cada cenário solicitado. Nenhuma das
+três lojas reais está ativa pela integração.
 
 ## Importação de teste disponível
 
@@ -101,10 +114,31 @@ credenciais, loja ou ambiente invalida a verificação anterior. Apenas
 `SAHARA_IFOOD_ENVIRONMENT=test` é aceito; a configuração production não consulta
 nem altera APIs externas.
 
+### Perfil separado da nova conta
+
+O perfil preparatório da nova conta usa variáveis opcionais separadas:
+
+| Variável | Valor |
+| --- | --- |
+| SAHARA_IFOOD_HOMOLOGATION_CLIENT_ID | clientId do Teste (C) da nova conta |
+| SAHARA_IFOOD_HOMOLOGATION_CLIENT_SECRET | segredo renovado, cadastrado diretamente no Render |
+| SAHARA_IFOOD_HOMOLOGATION_MERCHANT_ID | Merchant UUID da nova loja de teste, após confirmação |
+
+O clientId confirmado pela captura é
+`aceb55bd-caea-4f8a-9cd8-62adb5e40370`. O UUID da loja e um segredo renovado ainda
+precisam ser configurados por um meio seguro. Não obter o segredo da imagem nem
+enviá-lo pelo chat. O diagnóstico desse perfil é somente local: não autentica no
+iFood e permanece bloqueado para consultas e alterações mesmo com as variáveis
+preenchidas. Sua ativação exige implementar uma verificação independente,
+confirmar a renovação do segredo e comprovar o vínculo com a nova loja de teste.
+Ele não substitui as variáveis, a verificação ou a fila de eventos do importador
+anterior. Não é um perfil de produção.
+
 ## Contratos confirmados e fluxo
 
 A documentação do portal foi bloqueada por Cloudflare com HTTP403 no ambiente.
-O proprietário forneceu as referências oficiais por capturas e texto:
+O proprietário forneceu referências oficiais por capturas, texto e as quatro
+coleções do Postman:
 
 - Authentication: POST form-urlencoded
   `https://merchant-api.ifood.com.br/authentication/v1.0/oauth/token`, com
@@ -131,8 +165,8 @@ automaticamente.
 O primeiro pedido gerado no simulador oficial foi validado em 09/10/2026, às
 23h38 (GMT-3): dois itens, subtotal de R$21,00 e total original de R$27,00,
 com uma única ocorrência no PDV. O iFood aceitou a confirmação do evento com
-HTTP202 e a pendência local foi encerrada após a gravação. O serviço publicado
-usa a correção `a695f5f9b68a09acc1cd4439d5a341c8ab93de4d`; 25 testes de
+HTTP202 e a pendência local foi encerrada após a gravação. A publicação da ocasião
+usou a correção `a695f5f9b68a09acc1cd4439d5a341c8ab93de4d`; 25 testes de
 conexão/importação passaram antes da publicação. Isso valida a entrada do pedido
 de teste, sem confirmar preparo, despacho ou entrega no iFood.
 
@@ -178,11 +212,13 @@ conforme o iFood, sem gerar recebimento no caixa local. Não há baixa de estoqu
 fidelidade, fiado, campanha ou mensagem de WhatsApp para pedidos de teste.
 
 As etapas locais, pagamento, fiado e atribuição de entregador são bloqueados para
-pedidos importados, inclusive por API. Confira/gerencie esses pedidos no Gestor
-do iFood. Não habilite webhook antes de existir um receptor validado. Para
-integrar as quatro etapas, obtenha os contratos oficiais dos eventos de mudança
-e das ações de confirmação/preparo/despacho/entrega/cancelamento, incluindo
-transições, erros, reembolso e critérios de homologação.
+pedidos importados, inclusive por API. Os comandos manuais de teste descritos
+abaixo enviam solicitações ao iFood e não mudam essas etapas locais.
+Confira os resultados no Gestor do iFood. Não habilite webhook antes de existir
+um receptor validado. Para sincronizar as etapas, ainda faltam os contratos
+dos eventos de ciclo de vida e suas transições, incluindo cancelamento,
+entrega, erros e reembolso. A coleção recebida não define uma ação genérica de
+pedido entregue nem o mapeamento completo de códigos dos eventos.
 
 ## Transporte e validação
 
@@ -209,10 +245,13 @@ seleção de loja real ou de outro destino no navegador. A consulta tem reserva
 persistente e intervalo mínimo de 30 segundos; uma execução interrompida libera
 a reserva após três minutos.
 
-As únicas operações externas desta função são a autenticação já existente e os
+As operações externas desta consulta são a autenticação já existente e os
 GET de `/merchant/v1.0/merchants`, `/merchant/v1.0/merchants/{merchantId}` e
-`/merchant/v1.0/merchants/{merchantId}/status`. Ela não cria pausas, modifica
-horários, edita catálogos ou altera pedidos. Segredos são removidos da resposta;
+`/merchant/v1.0/merchants/{merchantId}/status`. A lista segue a paginação oficial,
+com até três páginas de cem lojas; atingir esse limite sem concluir a lista é
+apresentado como falha, não como resultado completo. A consulta não escreve no
+iFood; as operações manuais de teste têm controles próprios, descritos abaixo.
+Segredos são removidos da resposta;
 somente o estado seguro da consulta é persistido, sem armazenar a lista ou os
 detalhes completos da loja. O host, TLS e bloqueio de redirecionamento do cliente
 existente são preservados.
@@ -222,6 +261,81 @@ comprova vínculo dos aplicativos da nova conta, autorização das três lojas r
 ou aprovação na homologação. A execução remota precisa ser conferida no ambiente
 configurado; testes com provedor simulado não substituem essa conferência nem os
 vídeos com validação no Portal do Parceiro.
+
+## Operações manuais de homologação implementadas
+
+As áreas privadas de Merchant e Catalog aparecem em **Integrações**. Abrir o
+painel lê somente o estado local; as consultas ao provedor e as escritas exigem
+uma ação explícita. Todas usam login administrativo, origem válida, CSRF,
+ambiente `test` e conexão verificada para a configuração atual. O alvo é fixado
+no servidor: a loja confirmada `42f9aefa-b035-4e01-be92-d1c9a4adf828`. O navegador
+não escolhe um merchant de produção nem usa o perfil ainda bloqueado da nova conta.
+
+Cada escrita registra sua intenção antes da chamada externa. Respostas incertas
+bloqueiam novas escritas conflitantes. Para pausas e catálogo, a reconciliação
+consulta o resultado sem reenviar a criação. A propriedade dos recursos é ligada ao aplicativo e à loja,
+preservando as pendências quando o segredo da mesma conexão é renovado. A
+verificação da conexão, por sua vez, exige as credenciais atuais.
+
+### Merchant: pausas e leitura de horários
+
+É possível consultar interrupções, criar uma pausa com descrição, início e fim
+com fuso horário, remover uma pausa criada pelo sistema e reconciliar seu
+resultado por consulta. A remoção usa a operação local registrada; não aceita
+um ID remoto livre para apagar pausas de outra origem. Uma confirmação pela API
+ainda deve ser conferida no Portal do Parceiro para o vídeo.
+
+GET `/merchant/v1.0/merchants/{merchantId}/opening-hours` permite consultar os
+horários. A coleção também apresenta uma rota de escrita, mas seus exemplos não
+definem a unidade de `duration`, o formato de `start`, os valores de `dayOfWeek`
+ou a semântica de `storeId`. A alteração de horários permanece bloqueada até
+obter essas definições oficiais.
+
+### Catalog: recursos controlados e alterações individuais
+
+O painel descobre catálogos da loja de teste e consulta suas categorias e itens.
+A partir de modelos válidos efetivamente consultados, pode criar uma categoria
+**Teste Homologação**, um **Produto Teste** simples e um grupo com dois
+complementos. IDs novos e associações registradas separam os recursos criados
+dos modelos existentes. Códigos de status, tipo e template são aproveitados dos
+modelos, sem inventar enums ausentes na coleção.
+
+A criação do produto e dos complementos **reutiliza fotos de modelos existentes**.
+Isso não realiza upload e não conclui os cenários de envio ou substituição de
+imagens. A coleção descreve `/image/upload` apenas como `<object>`, sem schema
+do arquivo ou da resposta; essas funções permanecem bloqueadas.
+
+As rotas `/items/price`, `/items/status`, `/options/price` e `/options/status`
+enviam um PATCH por entidade criada e registrada pelo sistema. Os preços usam
+centavos inteiros; os status precisam ter sido observados no catálogo. O sistema
+consulta o recurso após a escrita para conferir o resultado. Operações em curso
+ou incertas mantêm a reserva até reconciliação, evitando novas alterações antes
+de conhecer seu resultado. Atualizações em lote permanecem bloqueadas porque
+não há contrato de lote nas coleções recebidas.
+
+Essas operações não copiam os 57 produtos do site e não alteram os cadastros ou
+catálogos das três lojas reais.
+
+### Order: solicitações manuais para pedidos importados de teste
+
+Cada cartão de pedido de teste elegível pode solicitar `confirm`,
+`startPreparation`, `readyToPickup`, `dispatch` ou `requestCancellation`.
+O ID externo vem exclusivamente do mapeamento privado do importador. Antes de
+cada comando, o servidor consulta os detalhes atuais e confere ID, loja e tipo
+delivery. O cancelamento exige consultar os motivos atuais e selecionar um
+código retornado pelo iFood, acompanhado de justificativa.
+
+HTTP202 é apresentado como **solicitação aceita, etapa pendente de confirmação**.
+Não marca o pedido como preparado, despachado, entregue ou cancelado no PDV e não
+altera estoque, caixa, pagamentos ou WhatsApp. A mesma solicitação não é reenviada
+quando já foi aceita; uma tentativa incerta bloqueia novos comandos para esse
+pedido. A atualização automática das etapas depende dos contratos de Events que
+ainda faltam. Nenhum desses comandos constitui aprovação na homologação.
+
+O transporte dessas operações limita a resposta a 2MiB, usa host HTTPS fixo,
+proxy/TLS preservados, token efêmero e timeout de oito segundos por requisição.
+Não segue redirecionamentos e só aceita os métodos e caminhos previstos. Tokens,
+segredos e corpos de erros do provedor não são gravados no histórico das operações.
 
 Testes locais exercitam provedores simulados, banco temporário e credenciais
 fictícias. Cobrem preços distintos do catálogo, adicionais, pagamentos, janelas

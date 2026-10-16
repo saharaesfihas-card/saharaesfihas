@@ -108,7 +108,7 @@
     if (!readOnly && state.csrf) headers['X-Sahara-CSRF'] = state.csrf;
     const controller = new AbortController();
     // Evolution checks may make two provider calls; pairing may make six.
-    const timeout = path === '/admin/whatsapp/connect' ? 100000 : ['/admin/ifood/import', '/admin/ifood/merchant'].includes(path) && method === 'POST' ? 60000 : path === '/admin/whatsapp' ? 35000 : 20000;
+    const timeout = path === '/admin/whatsapp/connect' ? 100000 : path.startsWith('/admin/ifood/') ? 60000 : path === '/admin/whatsapp' ? 35000 : 20000;
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
       const response = await fetch(`/api${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', signal: controller.signal, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
@@ -125,7 +125,7 @@
         }
         let detail = typeof data.detail === 'string' ? data.detail : (Array.isArray(data.detail) ? data.detail.map(item => typeof item.msg === 'string' ? item.msg : 'Campo inválido.').join(' ') : (typeof data.error === 'string' ? data.error : `Não foi possível concluir a operação (${response.status}). Confira os campos e tente novamente.`));
         if (Array.isArray(data.fields)) detail += ` ${data.fields.map(item => `${item.field || 'Campo'}: ${item.message || 'inválido'}`).join(' ')}`;
-        throw new Error(detail);
+        const error = new Error(detail); error.status = response.status; throw error;
       }
       return data;
     } catch (error) {
@@ -424,6 +424,12 @@
         details.append(feeForm.form); card.append(details);
       }
       card.append(actions); cards.append(card);
+      if (fromIFood) {
+        const ifoodActionsHost = el('div'); card.append(ifoodActionsHost);
+        const generation = state.generation;
+        queueMicrotask(() => window.SaharaIFoodTests?.mountOrder({ host: ifoodActionsHost, order, api, date,
+          isCurrent: () => generation === state.generation && Boolean(state.csrf) }));
+      }
       searchable.push([card, normalize([order.id, order.display_number, `#${orderNumber(order)}`, ifood.order_id, ifood.display_id, order.customer_name, order.customer_phone].join(' '))]);
     }
     const empty = emptyState('Nenhum pedido por aqui', 'Os pedidos recebidos pelo cardápio ou registrados no PDV aparecerão nesta área.');
@@ -1045,7 +1051,10 @@
     const refreshStoresButton = button('Atualizar lojas do iFood', refreshStores);
     storesPanel.append(el('p', 'Nesta etapa, o PDV guarda a identificação das lojas. A publicação dos cardápios e o recebimento de pedidos reais continuam pendentes.', 'help'),
       storesStatus, storeCards, refreshStoresButton);
-    screen.append(storesPanel, aiPanel, ifoodPanel, p, section);
+    const ifoodTestsHost = el('div');
+    screen.append(storesPanel, aiPanel, ifoodPanel, ifoodTestsHost, p, section);
+    window.SaharaIFoodTests?.mount({ host: ifoodTestsHost, api, date, money,
+      isCurrent: () => generation === state.generation && Boolean(state.csrf) });
     void refreshStores();
     void refreshIFood();
     void loadWhatsAppSection(section, generation);
