@@ -92,8 +92,7 @@ def encode(value):
 
 
 def metadata(api):
-    return {'environment': 'test', 'client_id': api.cfg[ifood.REQUIRED[0]],
-            'configured_merchant_id': api.merchant_id}
+    return {'environment': 'test', **ifood_test_api.metadata(api.cfg)}
 
 
 def public_operation(row):
@@ -337,15 +336,14 @@ def query_hours(request):
 
 @router.get(PREFIX + '/actions')
 def dashboard(request: Request, admin=Depends(require_admin)):
-    cfg = ifood.config()
+    cfg = ifood_test_api.configuration()
     state = ifood_merchant.readiness(request, cfg)
     digest = ifood.fingerprint(cfg)
     rows = operations(request, ifood_test_api.scope(cfg)) if state == 'available' else []
-    if ifood.fingerprint(ifood.config()) != digest:
+    if ifood.fingerprint(ifood_test_api.current_config(cfg)) != digest:
         state, rows = 'configuration_changed', []
-    extra = {'environment': cfg['environment'] if cfg['environment'] in ('test', 'production') else 'unknown'}
-    if state == 'available':
-        extra.update(client_id=cfg[ifood.REQUIRED[0]], configured_merchant_id=cfg[ifood.REQUIRED[2]].lower())
+    extra = {'environment': cfg['environment'] if cfg['environment'] in ('test', 'production') else 'unknown',
+             **ifood_test_api.metadata(cfg)}
     return result(state, writes_available=state == 'available', hours_write_available=False,
                   hours_write_reason=MESSAGES['contract_missing'], operations=rows, **extra)
 

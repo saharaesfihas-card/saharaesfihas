@@ -6,9 +6,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlsplit
 from urllib.request import Request as URLRequest
 
-from . import ifood, ifood_merchant
+from . import ifood, ifood_merchant, ifood_homologation_profile as test_profile
 
 MAX_RESPONSE = 2 * 1024 * 1024
+configuration = test_profile.selected_config
+current_config = test_profile.current_config
+metadata = test_profile.metadata
 
 
 def failure(state, status=None, uncertain=False):
@@ -26,9 +29,9 @@ def scope(cfg):
 class Session:
     """Configuração capturada, verificação atual e token efêmero por operação."""
 
-    def __init__(self, request, order_ids=()):
+    def __init__(self, request, order_ids=(), legacy=False):
         self.request = request
-        self.cfg = ifood.config()
+        self.cfg = configuration(legacy=legacy)
         self.digest = ifood.fingerprint(self.cfg)
         state = ifood_merchant.readiness(request, self.cfg)
         if state != 'available':
@@ -36,6 +39,7 @@ class Session:
         self.merchant_id = self.cfg[ifood.REQUIRED[2]].lower()
         self.client_id = self.cfg[ifood.REQUIRED[0]]
         self.scope = scope(self.cfg)
+        self.profile_mode = self.cfg['profile_mode']
         if not isinstance(order_ids, (tuple, list)) or any(not ifood.identifier(x) for x in order_ids):
             raise failure('request')
         # Callers bind IDs from the private imported-order registry, never a free target.

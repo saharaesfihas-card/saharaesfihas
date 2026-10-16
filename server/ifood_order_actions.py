@@ -75,7 +75,7 @@ def target(request, order_id):
         valid = False
     if not valid:
         raise HTTPException(409, MESSAGES['invalid_target'])
-    session = ifood_test_api.Session(request, order_ids=(row['external_id'],))
+    session = ifood_test_api.Session(request, order_ids=(row['external_id'],), legacy=True)
     if session.merchant_id != row['merchant_id']:
         raise HTTPException(409, MESSAGES['invalid_target'])
     return session, row['external_id']
@@ -88,7 +88,9 @@ def answer(row, state=None):
     return {'state': state, 'message': MESSAGES.get(state, MESSAGES['refused']),
             'environment': 'test', 'attempt_id': row['id'], 'action': row['action'], 'idempotency_key': row['idempotency_key'],
             'checked_at': row['updated_at'], 'http_status': row['http_status'],
-            'error_state': row['error_state'], 'local_status_changed': False}
+            'error_state': row['error_state'], 'local_status_changed': False,
+            'profile_mode': 'legacy', 'client_id': row['client_id'],
+            'configured_merchant_id': row['merchant_id']}
 
 
 def expire(conn, order_id):
@@ -100,7 +102,8 @@ def expire(conn, order_id):
 
 def provider_failure(error):
     return {'state': error.state, 'message': ifood.MESSAGES.get(error.state, ifood.MESSAGES['provider']),
-            'environment': 'test', 'http_status': getattr(error, 'http_status', None)}
+            'environment': 'test', 'http_status': getattr(error, 'http_status', None),
+            **ifood_test_api.metadata(ifood_test_api.configuration(legacy=True))}
 
 
 def details(session, external_id):
@@ -210,6 +213,7 @@ def status(order_id: str, request: Request, admin=Depends(require_admin)):
         blocked = conn.execute("SELECT 1 FROM ifood_order_action_attempts WHERE order_id=? AND state IN ('reserved','posting','uncertain') LIMIT 1",
                                (order_id,)).fetchone() is not None
     return {'environment': 'test', 'actions_available': not blocked, 'attempts': [answer(row) for row in rows],
+            **ifood_test_api.metadata(session.cfg),
             'local_status_changed': False}
 
 
@@ -220,7 +224,8 @@ def cancellation_reasons(order_id: str, request: Request, admin=Depends(require_
         details(session, external_id)
         values = reasons(session, external_id)
         session.unchanged()
-        return {'environment': 'test', 'state': 'queried', 'reasons': values, 'checked_at': utcnow()}
+        return {'environment': 'test', 'state': 'queried', 'reasons': values, 'checked_at': utcnow(),
+                **ifood_test_api.metadata(session.cfg)}
     except ifood.ProviderError as error:
         return provider_failure(error)
 

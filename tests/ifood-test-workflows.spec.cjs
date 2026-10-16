@@ -25,7 +25,10 @@ const GROUP = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const OPERATION = '99999999-9999-4999-8999-999999999999';
 const marker = '<img src=x onerror="window.__ifoodXSS=1">' + 'x'.repeat(120);
 const stamp = '2026-10-15T23:30:00Z';
-const metadata = { environment: 'test', client_id: CLIENT, configured_merchant_id: MID, checked_at: stamp };
+const metadata = { environment: 'test', profile_mode: 'legacy', client_id: CLIENT, configured_merchant_id: MID, checked_at: stamp };
+const NEW_CLIENT = 'aceb55bd-caea-4f8a-9cd8-62adb5e40370';
+const NEW_MID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const newMetadata = { ...metadata, profile_mode: 'homologation', client_id: NEW_CLIENT, configured_merchant_id: NEW_MID };
 const merchantPath = '/api/admin/ifood/merchant';
 const catalogPath = '/api/admin/ifood/test/catalog';
 const orderPath = '/api/admin/ifood/orders/local-ifood-test';
@@ -44,6 +47,9 @@ let orderFailure = false, orderLostState = null, merchantFailure = null, catalog
 let profileHTTP = 200, profileMessage = 'O perfil separado da conta nova ainda não foi configurado no servidor.';
 let profileDiscoveryAvailable = false, profileDiscoverState = 'queried';
 let profileDiscoverMessage = 'UUID da loja de teste consultado. O perfil permanece bloqueado.';
+let profileCheckAvailable = false, profileVerified = false, profileCheckState = 'verified', profileCheckHTTP = 200;
+let profileSelected = false;
+const activeMetadata = () => profileSelected ? newMetadata : metadata;
 let resources = [
   { catalog_id: CATALOG, kind: 'category', remote_id: CATEGORY, data: { name: 'Categoria criada no teste' } },
   { catalog_id: CATALOG, kind: 'item', remote_id: ITEM, item_id: ITEM, data: { name: 'Item criado no teste' } },
@@ -79,11 +85,11 @@ function hold(pathname) {
   return () => { heldPath = undefined; const done = held; held = undefined; release(); return done; };
 }
 function merchantReadiness() {
-  return { ...metadata, state: merchantAvailable ? 'available' : 'not_ready', message: merchantAvailable ? 'Operações de teste disponíveis.' : 'Loja de teste indisponível.',
+  return { ...activeMetadata(), state: merchantAvailable ? 'available' : 'not_ready', message: merchantAvailable ? 'Operações de teste disponíveis.' : 'Loja de teste indisponível.',
     writes_available: merchantAvailable, hours_write_available: false, hours_write_reason: 'Escrita de horários bloqueada: contrato incompleto.', operations: clone(merchantOperations) };
 }
 function catalogReadiness() {
-  return { environment: 'test', available: catalogAvailable, state: catalogAvailable ? 'available' : 'not_ready',
+  return { ...activeMetadata(), available: catalogAvailable, state: catalogAvailable ? 'available' : 'not_ready',
     message: catalogAvailable ? 'Catálogo de teste disponível.' : 'Catálogo indisponível.',
     capabilities: { image_upload: false, image_replacement: false, bulk_patch: false, single_entity_patch: true, group_creation: true },
     operations: clone(catalogOperations), resources: clone(resources) };
@@ -118,11 +124,20 @@ async function start() {
     if (!(path.startsWith(merchantPath + '/') || path.startsWith(catalogPath) || path.startsWith(orderPath) || path.startsWith(profilePath))) return route.continue();
     const body = request.postDataJSON(); requests.push({ path, method, body, csrf: request.headers()['x-sahara-csrf'] });
     if (heldPath === path) { captured = true; await held; }
-    if (path === profilePath) return reply({ environment: 'test', state: 'unconfigured', message: profileMessage,
-      discovery_available: profileDiscoveryAvailable, operations_available: false, required_variables: ['SERVER_ONLY_VARIABLE'], missing: ['SERVER_ONLY_VARIABLE'] }, profileHTTP);
+    if (path === profilePath) return reply({ environment: 'test', ...(profileCheckAvailable ? newMetadata : { profile_mode: 'legacy' }), state: profileVerified ? 'verified' : 'unconfigured', message: profileMessage,
+      discovery_available: profileDiscoveryAvailable, check_available: profileCheckAvailable,
+      connection_verified: profileVerified, operations_available: profileVerified,
+      selected_for_manual_scenarios: profileSelected, required_variables: ['SERVER_ONLY_VARIABLE'], missing: ['SERVER_ONLY_VARIABLE'] }, profileHTTP);
     if (path === profilePath + '/discover') return reply({ environment: 'test', state: profileDiscoverState,
       message: profileDiscoverMessage, operations_available: false, connection_verified: false,
       merchants: profileDiscoverState === 'queried' ? [{ merchant_id: MID, is_test: true, name: 'IGNORED_PROVIDER_FIELD' }] : [] });
+    if (path === profilePath + '/check') {
+      if (profileCheckHTTP !== 200) return reply({ detail: 'Verificação indisponível.' }, profileCheckHTTP);
+      profileVerified = profileCheckState === 'verified'; profileSelected = true;
+      merchantAvailable = profileVerified; catalogAvailable = profileVerified;
+      return reply({ ...newMetadata, state: profileCheckState, message: profileVerified ? 'Conexão da conta nova verificada.' : 'A conta nova não foi verificada.',
+        connection_verified: profileVerified, operations_available: profileVerified });
+    }
     if (path === merchantPath + '/actions') return reply(merchantReadiness());
     if (path === merchantPath + '/interruptions/query') return reply({ ...metadata, state: 'queried', message: 'Pausas consultadas.', interruptions: [{ id: 'provider-pause-id', description: marker, start: stamp, end: '2026-10-16T01:00:00Z' }] });
     if (path === merchantPath + '/opening-hours/query') return reply({ ...metadata, state: 'queried', message: 'Horários consultados.', opening_hours: [{ shifts: [{ marker }] }] });
@@ -215,10 +230,12 @@ async function run() {
   });
   await check('New account preparation is informational, renders plain text and fails independently', async () => {
     await profile().getByRole('status').filter({ hasText: profileMessage }).waitFor();
-    assert.match(await profile().innerText(), /Conta nova aguarda configuração segura e confirmação da loja de teste/);
+    assert.match(await profile().innerText(), /A consulta do UUID apenas identifica a loja de teste/);
     assert.equal(await profile().locator('input, select, textarea').count(), 0);
-    assert.equal(await profile().getByRole('button').count(), 2);
+    assert.equal(await profile().getByRole('button').count(), 3);
     assert.equal(await profile().getByRole('button', { name: 'Consultar UUID da loja de teste da conta nova', exact: true }).isDisabled(), true);
+    assert.equal(await profile().getByRole('button', { name: 'Verificar conexão da conta nova', exact: true }).isDisabled(), true);
+    assert.equal(count(profilePath + '/check'), 0);
     assert.doesNotMatch(await profile().innerText(), /SERVER_ONLY_VARIABLE/);
     assert.equal(requests.filter(request => request.path === profilePath).every(request => request.method === 'GET'), true);
     const before = writes().length; profileHTTP = 503;
@@ -245,7 +262,9 @@ async function run() {
     await discover.evaluate(node => node.click()); assert.equal(count(profilePath + '/discover'), 1); assert.equal(await discover.isDisabled(), true);
     release(); await profile().getByRole('status').filter({ hasText: profileDiscoverMessage }).waitFor();
     assert.match(await profile().innerText(), new RegExp(`UUID da loja de teste: ${MID}`));
-    assert.match(await profile().innerText(), /continua bloqueado para operações/);
+    assert.match(await profile().innerText(), /Esta consulta não verifica nem ativa a conexão/);
+    assert.match(await profile().innerText(), /Conexão da conta nova ainda não verificada/);
+    assert.equal(count(profilePath + '/check'), 0);
     assert.doesNotMatch(await profile().innerText(), /IGNORED_PROVIDER_FIELD|SERVER_ONLY_VARIABLE/);
     const request = requests.find(value => value.path === profilePath + '/discover'); assert.deepEqual(request.body, {}); assert.ok(request.csrf);
     assert.equal(await profile().locator('input, select, textarea, img, script').count(), 0);
@@ -387,7 +406,7 @@ async function run() {
     await catalog().getByLabel('Novo preço · R$', { exact: true }).fill('4,02');
     await catalog().getByRole('button', { name: 'Aplicar alteração individual no teste', exact: true }).click();
     await catalog().getByRole('status').filter({ hasText: 'Alteração pendente de conferência.' }).waitFor();
-    assert.equal(await catalog().getByRole('button', { name: 'Criar categoria Teste Homologação', exact: true }).isDisabled(), true);
+    assert.equal(await catalog().getByRole('button', { name: 'Criar categoria Teste Homologação', exact: true, includeHidden: true }).isDisabled(), true);
     assert.equal(await catalog().getByRole('button', { name: 'Aplicar alteração individual no teste', exact: true }).isDisabled(), true);
     const before = count('/items/price', 'PATCH');
     await catalog().getByRole('button', { name: 'Conferir esta alteração no iFood', exact: true }).click();
@@ -501,6 +520,112 @@ async function run() {
     await catalog().getByRole('button', { name: 'Atualizar operações do catálogo', exact: true }).click();
     await catalog().getByRole('status').filter({ hasText: 'Catálogo indisponível.' }).waitFor();
     assert.equal(await catalog().getByRole('button', { name: 'Consultar catálogos no iFood', exact: true }).isDisabled(), true);
+  });
+  await check('A local profile change clears legacy catalog choices and cannot start provider queries', async () => {
+    merchantAvailable = true; catalogAvailable = true;
+    await view('integrations'); await readyCatalog();
+    const before = writes().length;
+    merchantAvailable = false; catalogAvailable = false; profileCheckAvailable = true; profileSelected = true;
+    profileMessage = 'Aguardando verificação independente da conta nova.';
+    await profile().getByRole('button', { name: 'Atualizar status da conta nova', exact: true }).click();
+    await profile().locator(':scope[aria-busy="false"]').waitFor();
+    await merchant().getByRole('status').filter({ hasText: 'Loja de teste indisponível.' }).waitFor();
+    assert.equal(await catalog().getByLabel('Catálogo consultado no iFood', { exact: true }).inputValue(), '');
+    assert.equal(await catalog().getByLabel('Categoria existente para usar como modelo', { exact: true }).locator('option').count(), 1);
+    assert.equal(await catalog().getByRole('button', { name: 'Consultar categorias e itens', exact: true }).isDisabled(), true);
+    assert.equal(writes().length, before);
+    assert.match(await merchant().innerText(), new RegExp(NEW_MID));
+  });
+  await check('New-account verification is a separate manual request and failure never activates scenarios', async () => {
+    const verify = profile().getByRole('button', { name: 'Verificar conexão da conta nova', exact: true });
+    await waitFor(() => verify.isEnabled(), 'Configured profile did not expose manual verification');
+    const before = count(profilePath + '/check');
+    const providerBefore = requests.filter(value => value.method !== 'GET' && !value.path.startsWith(profilePath)).length;
+    assert.equal(count(profilePath + '/check'), before);
+    profileCheckState = 'test_proof_missing';
+    const release = hold(profilePath + '/check');
+    await verify.click(); await waitFor(() => captured, 'Missing manual verification request');
+    await verify.evaluate(node => node.click());
+    assert.equal(count(profilePath + '/check'), before + 1); assert.equal(await verify.isDisabled(), true);
+    assert.equal(await merchant().count(), 0); assert.equal(await catalog().count(), 0);
+    release(); await profile().getByRole('status').filter({ hasText: 'A conta nova não foi verificada.' }).waitFor();
+    await merchant().getByRole('status').filter({ hasText: 'Loja de teste indisponível.' }).waitFor();
+    assert.equal(await merchant().getByRole('button', { name: 'Criar pausa na loja de teste', exact: true }).isDisabled(), true);
+    assert.equal(await catalog().getByRole('button', { name: 'Consultar catálogos no iFood', exact: true }).isDisabled(), true);
+    assert.match(await profile().innerText(), /Conexão da conta nova ainda não verificada/);
+    assert.equal(profileSelected, true); assert.equal(profileVerified, false);
+    const sent = writes().findLast(value => value.path === profilePath + '/check');
+    assert.deepEqual(sent.body, {}); assert.ok(sent.csrf);
+    assert.equal(requests.filter(value => value.method !== 'GET' && !value.path.startsWith(profilePath)).length, providerBefore);
+    assert.equal(await profile().locator('input, select, textarea').count(), 0);
+  });
+  await check('Successful verification replaces manual context, clears old catalog choices and ignores late reads', async () => {
+    profileCheckState = 'verified';
+    const before = count(profilePath + '/check');
+    await profile().getByRole('button', { name: 'Verificar conexão da conta nova', exact: true }).click();
+    await profile().getByRole('status').filter({ hasText: 'Conexão da conta nova verificada.' }).waitFor();
+    await merchant().getByRole('status').filter({ hasText: 'Operações de teste disponíveis.' }).waitFor();
+    assert.match(await merchant().innerText(), new RegExp(NEW_CLIENT));
+    assert.match(await merchant().innerText(), new RegExp(NEW_MID));
+    assert.match(await catalog().innerText(), new RegExp(NEW_CLIENT));
+    await readyCatalog();
+    const release = hold(catalogPath + '/inspect');
+    await catalog().getByRole('button', { name: 'Consultar categorias e itens', exact: true }).click();
+    await waitFor(() => captured, 'Missing catalog read before account verification');
+    const discoveryBefore = count(catalogPath + '/discover');
+    await profile().getByRole('button', { name: 'Verificar conexão da conta nova', exact: true }).click();
+    await profile().getByRole('status').filter({ hasText: 'Conexão da conta nova verificada.' }).waitFor();
+    await merchant().getByRole('status').filter({ hasText: 'Operações de teste disponíveis.' }).waitFor();
+    assert.match(await merchant().innerText(), new RegExp(NEW_CLIENT));
+    assert.match(await merchant().innerText(), new RegExp(NEW_MID));
+    assert.match(await catalog().innerText(), new RegExp(NEW_CLIENT));
+    assert.match(await catalog().innerText(), /Conexão da conta nova · Teste \(C\)/);
+    assert.equal(await catalog().getByLabel('Catálogo consultado no iFood', { exact: true }).inputValue(), '');
+    assert.equal(await catalog().getByRole('button', { name: 'Consultar categorias e itens', exact: true }).isDisabled(), true);
+    release(); await page.waitForTimeout(100);
+    assert.equal(await catalog().getByLabel('Categoria existente para usar como modelo', { exact: true }).locator('option').count(), 1);
+    assert.equal(await catalog().getByRole('button', { name: 'Criar categoria Teste Homologação', exact: true, includeHidden: true }).isDisabled(), true);
+    assert.equal(count(profilePath + '/check'), before + 2); assert.equal(count(catalogPath + '/discover'), discoveryBefore);
+    assert.match(await profile().innerText(), /comandos dos pedidos importados continuam na conexão anterior/);
+  });
+  await check('Interrupted verification refreshes local state once and never retries an external request', async () => {
+    const before = count(profilePath + '/check');
+    profileCheckHTTP = 503;
+    await profile().getByRole('button', { name: 'Verificar conexão da conta nova', exact: true }).click();
+    await profile().getByRole('status').filter({ hasText: 'A resposta da verificação foi interrompida.' }).waitFor();
+    await profile().locator(':scope[aria-busy="false"]').waitFor();
+    assert.equal(count(profilePath + '/check'), before + 1);
+    assert.match(await profile().innerText(), /Conexão da conta nova verificada/);
+    profileCheckHTTP = 200;
+  });
+  await check('Late verification after navigation leaves the view untouched and Order retains legacy context', async () => {
+    const release = hold(profilePath + '/check');
+    await profile().getByRole('button', { name: 'Verificar conexão da conta nova', exact: true }).click();
+    await waitFor(() => captured, 'Missing held new-account verification');
+    await view('orders'); const notice = await page.locator('#notice').textContent();
+    release(); await page.waitForTimeout(100);
+    assert.equal(await profile().count(), 0); assert.equal(await merchant().count(), 0); assert.equal(await catalog().count(), 0);
+    assert.equal(await page.locator('#notice').textContent(), notice);
+    await page.getByText('Solicitações manuais ao iFood · teste', { exact: true }).click();
+    assert.match(await commands().innerText(), /Este pedido usa a conexão anterior do importador/);
+    assert.doesNotMatch(await commands().innerText(), new RegExp(NEW_CLIENT));
+  });
+  await check('Initial manual workflow readiness starts only after the first profile context is known', async () => {
+    const merchantBefore = count(merchantPath + '/actions', 'GET');
+    const catalogBefore = count(catalogPath, 'GET');
+    const release = hold(profilePath);
+    if (await page.locator('#sidebar').evaluate(node => node.inert)) await page.locator('#menu-toggle').click();
+    await page.locator('#navigation button[data-view="integrations"]').click();
+    await waitFor(() => captured, 'Missing initial profile context request');
+    await page.locator('#screen[aria-busy="false"]').waitFor();
+    assert.equal(count(merchantPath + '/actions', 'GET'), merchantBefore);
+    assert.equal(count(catalogPath, 'GET'), catalogBefore);
+    assert.equal(await merchant().count(), 0); assert.equal(await catalog().count(), 0);
+    release();
+    await merchant().getByRole('status').filter({ hasText: 'Operações de teste disponíveis.' }).waitFor();
+    await catalog().getByRole('status').filter({ hasText: 'Catálogo de teste disponível.' }).waitFor();
+    assert.match(await merchant().innerText(), new RegExp(NEW_CLIENT));
+    assert.match(await catalog().innerText(), new RegExp(NEW_MID));
   });
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   process.stdout.write(`\n${checks} workflow interface checks passed; no external provider was contacted.\n`);

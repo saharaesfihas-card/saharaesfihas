@@ -277,7 +277,7 @@ def _existing(request, session, body):
     if row['request_hash'] != digest:
         raise HTTPException(409, 'Esta chave já identifica uma operação diferente.')
     return {**answer(row['state'], operation_key=row['operation_key'], kind=row['kind'],
-                    resource_id=row['resource_id'], catalog_id=row['catalog_id'], environment='test'),
+                    resource_id=row['resource_id'], catalog_id=row['catalog_id'], environment='test', **ifood_test_api.metadata(session.cfg)),
             'checked_at': row['checked_at'], 'replayed': True}
 
 
@@ -288,7 +288,7 @@ def _finish(request, session, operation, state):
         current = conn.execute('SELECT state,checked_at FROM ifood_test_catalog_operations WHERE fingerprint=? AND operation_key=?',
                                (session.scope, operation['operation_key'])).fetchone()
     return {**answer(current['state'], operation_key=operation['operation_key'], kind=operation['kind'],
-                     resource_id=operation['resource_id'], catalog_id=operation['catalog_id'], environment='test'),
+                     resource_id=operation['resource_id'], catalog_id=operation['catalog_id'], environment='test', **ifood_test_api.metadata(session.cfg)),
             'checked_at': current['checked_at']}
 
 
@@ -365,7 +365,7 @@ def _guarded(action):
 
 @router.get(PREFIX)
 def dashboard(request: Request, admin=Depends(require_admin)):
-    cfg = ifood.config()
+    cfg = ifood_test_api.configuration()
     credential_digest = ifood.fingerprint(cfg)
     digest = ifood_test_api.scope(cfg)
     with db(request) as conn:
@@ -374,11 +374,12 @@ def dashboard(request: Request, admin=Depends(require_admin)):
         resources = conn.execute("SELECT catalog_id,kind,remote_id,item_id,data_json FROM ifood_test_catalog_registry "
                                  "WHERE fingerprint=? AND owned=1", (digest,)).fetchall()
     state = ifood_merchant.readiness(request, cfg)
-    if ifood.fingerprint(ifood.config()) != credential_digest:
+    if ifood.fingerprint(ifood_test_api.current_config(cfg)) != credential_digest:
         state = 'configuration_changed'
     if state != 'available':
         rows, resources = [], []
     return {'environment': 'test', 'state': state, 'available': state == 'available',
+            **ifood_test_api.metadata(cfg),
             'capabilities': capability(), 'operations': [dict(row) for row in rows],
             'resources': [{**{key: row[key] for key in ('catalog_id', 'kind', 'remote_id', 'item_id')},
                            'data': json.loads(row['data_json'])} for row in resources]}
@@ -403,7 +404,7 @@ def discover(body: Empty, request: Request, admin=Depends(require_admin)):
             catalog_id = catalog['catalogId'].lower()
             _save(request, session, catalog_id, 'catalog', catalog_id, catalog)
         return answer('queried', catalogs=catalogs, merchant_id=session.merchant_id,
-                      client_id=session.client_id, environment='test', capabilities=capability())
+                      environment='test', capabilities=capability(), **ifood_test_api.metadata(session.cfg))
     return _guarded(action)
 
 
@@ -415,7 +416,7 @@ def inspect(body: CatalogInput, request: Request, admin=Depends(require_admin)):
         _, data = session.call('GET', _path(session, 'catalogs/' + body.catalog_id + '/categories?includeItems=true'), expected=(dict, list))
         categories = _categories(data)
         _register_categories(request, session, body.catalog_id, categories)
-        return answer('queried', catalog_id=body.catalog_id, categories=categories, environment='test', capabilities=capability())
+        return answer('queried', catalog_id=body.catalog_id, categories=categories, environment='test', capabilities=capability(), **ifood_test_api.metadata(session.cfg))
     return _guarded(action)
 
 
@@ -623,7 +624,7 @@ def reconcile(body: ReconcileInput, request: Request, admin=Depends(require_admi
         operation = dict(row)
         if operation['state'] in ('sending', 'pending') and operation['lease_until'] > time.time():
             return {**answer(operation['state'], operation_key=body.operation_key, kind=operation['kind'],
-                             resource_id=operation['resource_id'], catalog_id=operation['catalog_id'], environment='test'),
+                             resource_id=operation['resource_id'], catalog_id=operation['catalog_id'], environment='test', **ifood_test_api.metadata(session.cfg)),
                     'checked_at': operation['checked_at'], 'retry_after_seconds': max(1, int(operation['lease_until'] - time.time()) + 1)}
         if operation['state'] == 'confirmed':
             return _finish(request, session, operation, 'confirmed')

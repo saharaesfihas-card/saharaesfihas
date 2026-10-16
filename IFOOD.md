@@ -13,8 +13,9 @@ na nova conta organizacional; a última tela confirmada mostra **Em desenvolvime
 A nova conta também contém **Teste (C)**, centralizado, e **Teste (D)**, distribuído.
 As capturas do **Teste (C)** confirmam Order, Catalog, Events e Merchant
 habilitados, uma loja de teste com permissão **Ativa** e webhook **Desativado**.
-O Merchant UUID dessa nova loja ainda não foi identificado. A conexão real exige
-aplicativo de produção homologado,
+O Merchant UUID dessa nova loja de teste foi confirmado por OAuth, listagem e
+detalhes com marcador explícito `test: "TEST"`: `d052228c-ac8c-4b29-a10c-6d062dde5287`.
+A conexão real exige aplicativo de produção homologado,
 autorização de cada loja e implementação/validação do fluxo de pedidos reais.
 O cadastro preparatório não publica cardápios nem consulta o iFood.
 
@@ -37,7 +38,19 @@ automática de itens, preços ou promoções
 entre as lojas. A área de importação de teste abaixo conserva a configuração
 existente; cadastrar uma loja real não ativa a importação de seus pedidos.
 
-Para concluir o trabalho: identificar os três Merchant UUIDs e catálogos; obter
+Os três UUIDs reais foram salvos e relidos no PDV em 16/10/2026:
+
+| Loja | ID do Portal | Merchant UUID real |
+| --- | --- | --- |
+| Esfihas 44 | 4172927 | bba9d647-16da-4586-b9e3-39e38633c01c |
+| Sahara Esfihas e Shawarma | 692154 | c01ebfc0-3a57-4b87-8374-3f5081820e18 |
+| Maktub Esfihas | 1263888 | 9de953a9-d508-42e5-be14-e83323dba92e |
+
+O campo mostrado pelo proprietário fica no **Portal do Parceiro → Configurações
+→ Perfil da loja → ID da loja**, em `https://portal.ifood.com.br/merchant/profile`.
+Salvar esses valores não ativa as três integrações.
+
+Para concluir o trabalho: conferir os três catálogos; obter
 as permissões de produção para Order/Events e catálogo; implementar o roteamento
 por loja, sincronização de etapas e publicação de catálogo conforme os contratos
 oficiais; então validar a operação de cada loja antes da ativação.
@@ -124,23 +137,34 @@ O perfil preparatório da nova conta usa variáveis opcionais separadas:
 | SAHARA_IFOOD_HOMOLOGATION_CLIENT_SECRET | segredo renovado, cadastrado diretamente no Render |
 | SAHARA_IFOOD_HOMOLOGATION_MERCHANT_ID | Merchant UUID da nova loja de teste, após confirmação |
 
-O clientId confirmado pela captura é
-`aceb55bd-caea-4f8a-9cd8-62adb5e40370`. O UUID da loja e um segredo renovado ainda
-precisam ser configurados por um meio seguro. Não obter o segredo da imagem nem
-enviá-lo pelo chat. O proprietário informou que renovou o segredo; o valor novo
-precisa ser salvo com segurança no servidor. O GET de diagnóstico desse perfil é
-somente local. Com clientId e segredo configurados, o botão **Consultar UUID da
-loja de teste da conta nova** executa OAuth e apenas GETs de listagem/detalhes,
-sem exigir que o UUID já seja conhecido. Retorna somente UUIDs com ID coincidente
-e marcador explícito `test: "TEST"`; uma loja sem essa comprovação invalida o
-resultado inteiro. A consulta tem paginação limitada, prazo, cooldown e bloqueio
-por mudança de configuração. Não salva automaticamente o UUID nem ativa operações.
+O clientId confirmado é `aceb55bd-caea-4f8a-9cd8-62adb5e40370`, com a loja de teste
+`d052228c-ac8c-4b29-a10c-6d062dde5287`. O proprietário renovou e cadastrou o segredo
+diretamente no Render. Não obter o segredo das capturas nem enviá-lo pelo chat.
+O GET de diagnóstico é somente local. **Consultar UUID da loja de teste da conta
+nova** faz OAuth e GETs limitados de listagem/detalhes, retornando somente IDs
+coincidentes com marcador explícito `test: "TEST"`. A descoberta não ativa operações.
 
-A variável opcional `SAHARA_IFOOD_HOMOLOGATION_ENVIRONMENT` aceita somente `test`
-(padrão). O perfil continua bloqueado para operações de negócio. Sua ativação
-exige preparar o uso independente desse perfil e validar os fluxos/filas próprios.
-Ele não substitui as variáveis, a verificação ou a fila de eventos do importador
-anterior. Não é um perfil de produção.
+**Verificar conexão da conta nova** executa uma verificação independente: confirma
+OAuth, vínculo da loja e marcador TEST, e registra somente um resultado seguro
+associado à configuração completa atual. Depois da verificação, os cenários
+manuais Merchant/Catalog usam essa conta. O painel identifica o clientId e a loja
+utilizados. O app e o UUID são restritos aos dois valores confirmados acima;
+preencher uma loja real nas variáveis não a libera para estes testes.
+
+A presença de qualquer variável `SAHARA_IFOOD_HOMOLOGATION_*` seleciona o perfil
+novo para os cenários manuais. Configuração incompleta, ambiente diferente de
+`test`, segredo alterado ou verificação ausente bloqueiam as operações. Sem essas
+variáveis, os cenários conservam o perfil legado com sua verificação própria.
+Mudanças de perfil durante uma chamada invalidam o contexto anterior. Credenciais
+não aparecem na interface ou nas respostas. A variável opcional
+`SAHARA_IFOOD_HOMOLOGATION_ENVIRONMENT` tem padrão `test`.
+
+O importador, a fila de eventos e os comandos dos pedidos já importados continuam
+usando explicitamente a conexão legada e sua verificação original. Verificar o
+perfil novo não substitui essas variáveis ou a fila, não importa pedidos da conta
+nova e não habilita nenhuma das três lojas reais. Os registros de operações são
+separados por app e loja; uma troca de segredo não apaga a propriedade nem permite
+repetir uma escrita de resultado incerto.
 
 ## Contratos confirmados e fluxo
 

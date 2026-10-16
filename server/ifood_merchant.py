@@ -9,7 +9,7 @@ from urllib.request import Request as URLRequest
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 
-from . import ifood, ifood_stores
+from . import ifood, ifood_stores, ifood_homologation_profile as test_profile
 from .core import db, require_admin, utcnow
 
 router = APIRouter()
@@ -45,6 +45,8 @@ def result(state, **extra):
 
 
 def readiness(request, cfg):
+    if cfg.get('profile_mode') == 'homologation':
+        return test_profile.readiness(request, cfg)
     if not cfg['ready'] or cfg['environment'] != 'test':
         return 'not_ready'
     merchant_id = cfg[ifood.REQUIRED[2]].lower()
@@ -63,23 +65,23 @@ def readiness(request, cfg):
 
 
 def unchanged(request, cfg, digest):
-    if ifood.fingerprint(ifood.config()) != digest or readiness(request, cfg) != 'available':
+    if ifood.fingerprint(test_profile.current_config(cfg)) != digest or readiness(request, cfg) != 'available':
         raise ifood.ProviderError('configuration_changed')
 
 
 def dashboard(request):
-    cfg = ifood.config()
+    cfg = test_profile.selected_config()
     digest = ifood.fingerprint(cfg)
     state = readiness(request, cfg)
     with db(request) as conn:
         row = conn.execute('SELECT fingerprint,result_json FROM ifood_merchant_query WHERE id=1').fetchone()
     last = json.loads(row['result_json']) if row and row['fingerprint'] == digest and row['result_json'] else None
-    if ifood.fingerprint(ifood.config()) != digest:
+    if ifood.fingerprint(test_profile.current_config(cfg)) != digest:
         state, last = 'configuration_changed', None
     return {'query_available': state == 'available', 'state': state, 'message': MESSAGES[state],
             'environment': cfg['environment'] if cfg['environment'] in ('test', 'production') else 'unknown',
             'configured_merchant_id': cfg[ifood.REQUIRED[2]].lower() if cfg['valid'] else None,
-            'last_result': last}
+            'last_result': last, **test_profile.metadata(cfg)}
 
 
 def sanitize(value, private_values, max_response=MAX_RESPONSE, max_nodes=10000):
@@ -120,7 +122,7 @@ def sanitize(value, private_values, max_response=MAX_RESPONSE, max_nodes=10000):
 
 
 def query(request):
-    cfg = ifood.config()
+    cfg = test_profile.selected_config()
     state = readiness(request, cfg)
     if state != 'available':
         return result(state)
@@ -163,18 +165,21 @@ def query(request):
         merchant = read('/merchant/v1.0/merchants/' + merchant_id, 'merchant', dict)
         if not isinstance(merchant.get('id'), str) or merchant['id'].lower() != merchant_id:
             raise ifood.ProviderError('response', 'merchant')
+        if cfg['profile_mode'] == 'homologation' and merchant.get('test') != 'TEST':
+            raise ifood.ProviderError('response', 'merchant')
         availability = read('/merchant/v1.0/merchants/' + merchant_id + '/status', 'availability', list)
         if len(availability) > 100 or any(not isinstance(item, dict) for item in availability):
             raise ifood.ProviderError('response', 'availability')
         unchanged(request, cfg, digest)
         answer = sanitize(result('queried', environment='test', client_id=cfg[ifood.REQUIRED[0]],
-            configured_merchant_id=merchant_id, merchants=merchants, merchant=merchant, availability=availability),
+            configured_merchant_id=merchant_id, merchants=merchants, merchant=merchant, availability=availability,
+            profile_mode=cfg['profile_mode']),
             (cfg[ifood.REQUIRED[1]], token))
     except ifood.ProviderError as error:
         answer = result(error.state, **({'phase': error.phase} if error.phase in PHASES else {}))
     except (ValueError, TypeError, RecursionError, OverflowError):
         answer = result('response')
-    if ifood.fingerprint(ifood.config()) != digest or readiness(request, cfg) != 'available':
+    if ifood.fingerprint(test_profile.current_config(cfg)) != digest or readiness(request, cfg) != 'available':
         answer = result('configuration_changed')
     # Somente o estado da consulta é persistido; listas e dados da loja ficam na resposta privada.
     saved = {key: value for key, value in answer.items() if key in ('state', 'message', 'checked_at', 'phase')}

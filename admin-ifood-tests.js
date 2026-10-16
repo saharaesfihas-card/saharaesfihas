@@ -57,7 +57,8 @@
   function context(target, result, formatDate) {
     target.replaceChildren();
     if (result.environment !== 'test') return;
-    const values = [result.checked_at ? `Consulta: ${formatDate(result.checked_at)}` : '',
+    const values = [result.profile_mode === 'homologation' ? 'Conexão da conta nova · Teste (C)' : result.profile_mode === 'legacy' ? 'Conexão anterior · teste' : '',
+      result.checked_at ? `Consulta: ${formatDate(result.checked_at)}` : '',
       result.client_id ? `client_id de teste: ${result.client_id}` : '',
       result.configured_merchant_id || result.merchant_id ? `Loja de teste: ${result.configured_merchant_id || result.merchant_id}` : ''];
     target.textContent = values.filter(Boolean).join(' · ');
@@ -77,33 +78,77 @@
   const fallbackDate = value => value || '—';
   const message = result => result.message || labels[result.state] || 'Confira o resultado da operação.';
   const definitive = error => [400, 401, 403, 404, 409, 422].includes(error.status);
+  const contextKey = value => JSON.stringify([value?.profile_mode || '', value?.client_id || '', value?.configured_merchant_id || value?.merchant_id || '']);
 
-  function homologationProfile({ host, api, isCurrent }) {
+  function homologationProfile({ host, api, isCurrent, date, profileChanged, checkingProfile }) {
     const panel = section('Conta nova · preparação para homologação', 'Preparação da conta nova no iFood'); host.append(panel.host);
-    let busy = false, discoveryAvailable = false;
+    let busy = false, discoveryAvailable = false, checkAvailable = false, signature = null;
     const refreshButton = button('Atualizar status da conta nova', refresh);
     const discoverButton = button('Consultar UUID da loja de teste da conta nova', discover);
-    const results = el('div');
-    panel.host.append(el('p', 'Conta nova aguarda configuração segura e confirmação da loja de teste. A consulta do UUID mantém este perfil bloqueado para operações.', 'help'),
-      refreshButton, discoverButton, results);
+    const checkButton = button('Verificar conexão da conta nova', verify);
+    const results = el('div'), metadata = el('p', '', 'help'), verified = el('p', '', 'help');
+    panel.host.append(el('p', 'A consulta do UUID apenas identifica a loja de teste. Verifique a conexão para liberar os cenários manuais de Merchant e Catálogo da conta nova.', 'help'),
+      refreshButton, discoverButton, checkButton, metadata, verified, results);
     function update() {
       refreshButton.disabled = busy; discoverButton.disabled = busy || !discoveryAvailable;
+      checkButton.disabled = busy || !checkAvailable;
       panel.host.setAttribute('aria-busy', String(busy));
+    }
+    function apply(value) {
+      discoveryAvailable = value?.environment === 'test' && value.discovery_available === true;
+      checkAvailable = value?.environment === 'test' && value.check_available === true;
+      const available = value?.environment === 'test' && value.profile_mode === 'homologation'
+        && value.selected_for_manual_scenarios === true && value.connection_verified === true && value.operations_available === true;
+      verified.textContent = available
+        ? 'Conexão da conta nova verificada. Merchant e Catálogo usam esta loja de teste. Os comandos dos pedidos importados continuam na conexão anterior.'
+        : 'Conexão da conta nova ainda não verificada. A consulta do UUID não libera operações.';
+      context(metadata, value || {}, date);
+      const next = JSON.stringify([contextKey(value), available, value?.selected_for_manual_scenarios === true]);
+      if (next !== signature) profileChanged();
+      signature = next;
+    }
+    async function load() {
+      const value = await api('/admin/ifood/homologation-profile');
+      if (!isCurrent()) return;
+      apply(value); return value;
     }
     async function refresh() {
       if (!isCurrent() || busy) return;
       busy = true; update(); results.replaceChildren();
       try {
-        const value = await api('/admin/ifood/homologation-profile');
-        if (!isCurrent()) return;
-        discoveryAvailable = value?.environment === 'test' && value.discovery_available === true;
+        const value = await load(); if (!isCurrent()) return;
         panel.status.textContent = value?.environment === 'test' && typeof value.message === 'string'
           ? value.message : 'Não foi possível conferir o status da conta nova.';
       } catch {
-        if (isCurrent()) { discoveryAvailable = false; panel.status.textContent = 'Não foi possível consultar o status da conta nova. Atualize esta seção para conferir.'; }
+        if (isCurrent()) {
+          discoveryAvailable = false; checkAvailable = false; metadata.replaceChildren();
+          verified.textContent = 'Não foi possível conferir o estado atual da conexão da conta nova.';
+          panel.status.textContent = 'Não foi possível consultar o status da conta nova. Atualize esta seção para conferir.';
+          profileChanged();
+        }
       } finally {
         busy = false;
         if (isCurrent()) update();
+      }
+    }
+    async function verify() {
+      if (!isCurrent() || busy || !checkAvailable) return;
+      busy = true; update(); results.replaceChildren(); checkingProfile(true);
+      panel.status.textContent = 'Verificando a conexão e a identificação da loja de teste da conta nova…';
+      let answer;
+      try {
+        const value = await api('/admin/ifood/homologation-profile/check', { method: 'POST', body: {} });
+        if (!isCurrent()) return;
+        answer = value?.environment === 'test' && typeof value.message === 'string'
+          ? value.message : 'Não foi possível verificar a conexão da conta nova.';
+      } catch {
+        if (isCurrent()) answer = 'A resposta da verificação foi interrompida. Confira o status local antes de tentar novamente.';
+      } finally {
+        if (isCurrent()) {
+          try { await load(); }
+          catch { discoveryAvailable = false; checkAvailable = false; metadata.replaceChildren(); verified.textContent = 'Não foi possível conferir o estado atual da conexão da conta nova.'; }
+          if (isCurrent()) { checkingProfile(false); panel.status.textContent = answer; busy = false; update(); }
+        }
       }
     }
     async function discover() {
@@ -119,7 +164,7 @@
             && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(merchant.merchant_id));
           if (!valid) { panel.status.textContent = 'A consulta não retornou uma lista válida de lojas de teste.'; return; }
           for (const merchant of value.merchants) results.append(el('p', `UUID da loja de teste: ${merchant.merchant_id}`, 'help'));
-          results.append(el('p', 'Consulta concluída. O perfil da conta nova continua bloqueado para operações.', 'help'));
+          results.append(el('p', 'Consulta concluída. Esta consulta não verifica nem ativa a conexão da conta nova.', 'help'));
         }
       } catch {
         if (isCurrent()) panel.status.textContent = 'Não foi possível consultar a loja de teste da conta nova. Confira a configuração segura e atualize o status.';
@@ -199,6 +244,7 @@
     async function load() {
       const value = await api(`${MERCHANT}/actions`);
       if (!current()) return;
+      if (readiness && contextKey(value) !== contextKey(readiness)) { unknownKey = null; resultBox.replaceChildren(); }
       readiness = value; operations = rows(value.operations);
       const interrupted = operations.find(operation => operation.idempotency_key === unknownKey);
       if (interrupted && ['confirmed', 'rejected'].includes(interrupted.state)) unknownKey = null;
@@ -374,10 +420,14 @@
     async function load() {
       const value = await api(CAT);
       if (!current()) return;
+      if (ready && contextKey(value) !== contextKey(ready)) {
+        catalogs = []; categories = []; inspected = ''; unknownKey = null;
+        options(catalog.input, []); resultBox.replaceChildren();
+      }
       ready = value; operations = rows(value.operations); resources = rows(value.resources);
       const interrupted = operations.find(operation => operation.operation_key === unknownKey);
       if (interrupted && ['confirmed', 'failed'].includes(interrupted.state)) unknownKey = null;
-      selections(); return value;
+      context(metadata, value, date); selections(); return value;
     }
     async function refresh() {
       if (!current() || busy) return;
@@ -431,8 +481,24 @@
     if (!options?.host || typeof options.api !== 'function' || typeof options.isCurrent !== 'function') return;
     if (mounted.has(options.host)) return mounted.get(options.host);
     const config = { date: fallbackDate, ...options };
-    const profile = homologationProfile(config), merchant = merchantPanel(config), catalog = catalogPanel(config);
-    const controls = { refresh: () => { void profile.refresh(); void merchant.refresh(); void catalog.refresh(); } };
+    const profileHost = el('div'), workflowsHost = el('div'); config.host.append(profileHost, workflowsHost);
+    workflowsHost.append(el('p', 'Conferindo o contexto da conexão para os cenários de teste…', 'help'));
+    let generation = 0, checking = false, merchant, catalog;
+    function workflows() {
+      generation++; workflowsHost.replaceChildren();
+      const currentGeneration = generation;
+      const scoped = { ...config, host: workflowsHost, isCurrent: () => config.isCurrent() && currentGeneration === generation && !checking };
+      merchant = merchantPanel(scoped); catalog = catalogPanel(scoped);
+    }
+    const profile = homologationProfile({ ...config, host: profileHost,
+      profileChanged: () => { if (!checking && config.isCurrent()) workflows(); },
+      checkingProfile: value => {
+        checking = value;
+        if (value) { generation++; workflowsHost.replaceChildren(el('p', 'Verificando a conta nova. Aguarde para consultar os cenários manuais de teste.', 'help')); }
+        else if (config.isCurrent()) workflows();
+      },
+    });
+    const controls = { refresh: () => { void profile.refresh(); if (!checking) { void merchant?.refresh(); void catalog?.refresh(); } } };
     mounted.set(options.host, controls); return controls;
   }
 
@@ -464,7 +530,7 @@
     });
     const cancel = button('Solicitar cancelamento no iFood', () => submit('requestCancellation'));
     controls.append(refreshButton, ...buttons.map(value => value.node));
-    panel.host.append(el('p', 'Cada botão envia uma solicitação à loja de teste configurada. HTTP 202 indica aceite para processamento; a etapa local, o caixa e o estoque permanecem sem confirmação. Confira o resultado no Portal do iFood.', 'help'),
+    panel.host.append(el('p', 'Este pedido usa a conexão anterior do importador, independente da conta nova de homologação. Cada botão envia uma solicitação à loja de teste deste pedido. HTTP 202 indica aceite para processamento; a etapa local, o caixa e o estoque permanecem sem confirmação. Confira o resultado no Portal do iFood.', 'help'),
       controls, reasonButton, reason.box, justification.box, cancel, history);
     function update() {
       refreshButton.disabled = busy;

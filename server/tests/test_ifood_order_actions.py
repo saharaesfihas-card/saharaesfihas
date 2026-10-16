@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 
 from fastapi.testclient import TestClient
 
-from server import ifood, ifood_order_actions as actions, ifood_stores
+from server import ifood, ifood_order_actions as actions, ifood_stores, ifood_homologation_profile as profile
 from server.core import hash_password
 from server.main import create_app
 
@@ -311,3 +311,28 @@ class IFoodOrderActionTests(unittest.TestCase):
             result = self.post().json()
         self.assertEqual(result['state'], 'uncertain')
         self.assertEqual(result['error_state'], 'configuration_changed')
+
+    def test_imported_order_context_remains_legacy_while_homo_configuration_changes(self):
+        before = self.snapshot()
+        with patch.dict(os.environ, dict(zip(profile.REQUIRED,
+                (profile.CLIENT_ID, 'fictional-new-profile-secret', profile.TEST_MERCHANT_ID)))):
+            status = self.client.get(PATH + '/actions').json()
+            self.assertTrue(status['actions_available'])
+            self.assertEqual(status['profile_mode'], 'legacy')
+            self.assertEqual(status['client_id'], CLIENT)
+            self.assertEqual(status['configured_merchant_id'], MERCHANT)
+            def transport(request, **kwargs):
+                value = self.transport(request, **kwargs)
+                if request.full_url.endswith(REMOTE):
+                    os.environ[profile.REQUIRED[1]] = 'different-new-profile-secret'
+                return value
+            with patch('server.ifood.evolution.open_url', side_effect=transport):
+                result = self.post().json()
+            self.assertEqual(result['state'], 'accepted_pending')
+            self.assertEqual(result['profile_mode'], 'legacy')
+            self.assertEqual(result['client_id'], CLIENT)
+            self.assertEqual(result['configured_merchant_id'], MERCHANT)
+            self.assertEqual([request.full_url for request in self.calls], [
+                ifood.HOST + '/authentication/v1.0/oauth/token',
+                ifood.HOST + REMOTE, ifood.HOST + REMOTE + '/confirm'])
+        self.assertEqual(before, self.snapshot())

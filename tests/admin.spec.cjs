@@ -508,6 +508,7 @@ async function run() {
   });
   await check('Delivery policy saves the store pin and the 5 to 6 km rule', async () => {
     await view('integrations');
+    await page.getByText('Falta o pino exato da loja para calcular o raio.', { exact: false }).waitFor();
     assert.match(await page.locator('#screen').innerText(), /Falta o pino exato/);
     await page.getByText('Configurar o ponto da loja e a faixa de 5 a 6 km', { exact: true }).click();
     await page.locator('#field-integrations-delivery_pin').fill('https://www.google.com/maps?q=-23.4656,-51.9108');
