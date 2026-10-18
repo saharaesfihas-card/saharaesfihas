@@ -21,7 +21,7 @@ O [painel do PDV](https://sahara-esfihas-pdv.onrender.com/admin.html) e a API es
 | Fidelidade | Um ponto por R$ 1 do total líquido de cada pedido entregue e pago, arredondado para baixo; benefícios e resgates registrados no painel. |
 | Campanhas | Rascunhos com público que autorizou ofertas. Nenhuma mensagem é disparada. |
 | Entregadores | Cadastro, atribuição manual a pedidos e abertura do endereço no mapa. Sem localização ao vivo ou cálculo automático de rotas. |
-| Comandas | Impressão pelo navegador. A API guarda perfis de largura e quantidade de cópias; não conecta impressoras de rede nem imprime automaticamente. |
+| Comandas | Impressão pelo navegador, manual ou ao receber novos pedidos quando o painel está aberto. Usa a impressora padrão do Windows; impressão direta depende do Chrome em modo de quiosque. Não descobre impressoras Bluetooth nem conecta várias impressoras. |
 | Avaliações | Recebimento pela API com o token do pedido entregue e consulta no painel. |
 | Resultados | Pedidos, vendas com pagamento registrado, ticket médio e vendas por dia. A conversão depende dos eventos de visita efetivamente registrados. |
 
@@ -41,7 +41,7 @@ As demais integrações continuam **pendentes**, com o motivo de cada pendência
 - iFood, Entrega Fácil e F360;
 - Meta Ads, Google Ads, Analytics e GTM;
 - recuperação automática de carrinho;
-- impressão automática em múltiplas impressoras.
+- impressão direta em impressoras sem usar a fila do navegador ou integração de rede com múltiplas impressoras.
 
 Esses serviços exigem contas, autorização e configuração dos respectivos provedores. Não há integração ativa com a Cardápio Web. A seleção de Pix ou cartão no cardápio apenas informa a preferência de pagamento à loja. Mesas e comandas de salão não fazem parte desta operação de delivery.
 

@@ -53,6 +53,32 @@ Escolha a impressora, papel de 80 mm ou o tamanho compatível, uma cópia e toda
 as páginas. O PDV não recebe confirmação física de impressão, falta de papel
 ou cancelamento da janela. Se necessário, use **Imprimir comanda** novamente.
 
+## Localizar a Knup no Windows
+
+O PDV roda no navegador e não pode listar diretamente os dispositivos Bluetooth
+do computador. O Chrome envia a comanda para a impressora padrão do Windows;
+por isso, primeiro confirme que a Knup está instalada no próprio Windows:
+
+1. Abra **Configurações do Windows → Bluetooth e dispositivos → Impressoras e
+   scanners**. Localize a Knup 605 pelo nome que o Windows atribuiu. Se ela não
+   estiver na lista, use **Adicionar dispositivo** e conclua o pareamento; o
+   PIN informado para este aparelho é `7711`.
+2. Abra a impressora na lista e escolha **Definir como padrão**. Em seguida,
+   imprima uma página de teste nas propriedades da impressora. Se a página de
+   teste já imprime, não reinstale o driver: apenas defina essa impressora como
+   padrão.
+3. Nas preferências de impressão do driver, escolha o tamanho do rolo que está
+   carregado. Faça uma comanda manual pelo PDV para conferir alinhamento e
+   corte antes de ativar a impressão automática.
+4. Para dispensar a janela de impressão em cada pedido, abra o PDV pelo atalho
+   **Abrir-PDV-Impressao-Direta.cmd** descrito abaixo. O atalho usa a impressora
+   padrão do Windows e não escolhe uma impressora por Bluetooth.
+
+Se a Knup imprime a página de teste mas não aparece como padrão nas preferências
+do Chrome, feche o Chrome, abra o atalho direto e confira novamente. Em Windows,
+o navegador só consegue enviar a comanda às filas de impressão que o sistema já
+instalou.
+
 ## Imprimir diretamente no Chrome do Windows
 
 Depois de instalar e testar a impressora padrão:
