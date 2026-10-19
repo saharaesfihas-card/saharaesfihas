@@ -477,11 +477,67 @@
     void refresh(); return { refresh };
   }
 
+  function homologationOrderImport({ host, api, isCurrent, date }) {
+    const panel = section('Pedidos da conta nova · TESTE', 'Importação de pedidos da conta nova');
+    host.append(panel.host);
+    const metadata = el('p', '', 'help'), counters = el('p', '', 'help');
+    let available = false, busy = false;
+    const refreshButton = button('Atualizar importação da conta nova', refresh);
+    const importButton = button('Buscar pedidos da conta nova no iFood', sync);
+    panel.host.append(el('p', 'Importa pedidos somente da loja Teste (C) verificada. Esta fila é separada da conexão anterior; os pedidos entram em Pedidos e cozinha como testes.', 'help'),
+      refreshButton, importButton, metadata, counters);
+    function update() {
+      refreshButton.disabled = busy;
+      importButton.disabled = busy || !available;
+      panel.host.setAttribute('aria-busy', String(busy));
+    }
+    function show(value) {
+      panel.status.textContent = [value.last_sync?.message || value.message || message(value),
+        value.last_sync?.error || value.error].filter(Boolean).join(' ');
+      const contextValues = [value.profile_mode === 'homologation' ? 'Conta nova · Teste (C)' : '',
+        value.client_id ? `client_id: ${value.client_id}` : '',
+        value.configured_merchant_id ? `loja: ${value.configured_merchant_id}` : '',
+        value.checked_at || value.last_sync?.checked_at ? `consulta: ${date(value.checked_at || value.last_sync.checked_at)}` : ''];
+      metadata.textContent = contextValues.filter(Boolean).join(' · ');
+      const result = value.last_sync || value;
+      counters.textContent = result.checked_at
+        ? `Importados: ${result.imported || 0} · Já recebidos: ${result.replayed || 0} · Eventos confirmados: ${result.acknowledged || 0} · Pendentes: ${result.pending_ack || 0} · Falhas: ${result.failed || 0} · Próximos: ${result.remaining || 0}`
+        : 'Ainda não foi feita uma consulta de pedidos nesta conta.';
+    }
+    async function refresh() {
+      if (!isCurrent() || busy) return;
+      busy = true; update();
+      try {
+        const value = await api('/admin/ifood/homologation/import');
+        if (!isCurrent()) return;
+        available = value.environment === 'test' && value.profile_mode === 'homologation' && value.import_available === true;
+        show(value);
+      } catch (error) {
+        if (isCurrent()) { available = false; panel.status.textContent = error.message; }
+      } finally { busy = false; if (isCurrent()) update(); }
+    }
+    async function sync() {
+      if (!isCurrent() || busy || !available) return;
+      busy = true; update(); panel.status.textContent = 'Consultando eventos e pedidos da conta nova…';
+      try {
+        const value = await api('/admin/ifood/homologation/import', { method: 'POST', body: {} });
+        if (!isCurrent()) return;
+        available = value.environment === 'test' && value.profile_mode === 'homologation'
+          && value.state !== 'not_ready' && value.state !== 'configuration_changed';
+        show(value);
+      } catch (error) {
+        if (isCurrent()) { panel.status.textContent = error.message; available = false; }
+      } finally { busy = false; if (isCurrent()) update(); }
+    }
+    void refresh(); return { refresh };
+  }
+
   function mount(options) {
     if (!options?.host || typeof options.api !== 'function' || typeof options.isCurrent !== 'function') return;
     if (mounted.has(options.host)) return mounted.get(options.host);
     const config = { date: fallbackDate, ...options };
-    const profileHost = el('div'), workflowsHost = el('div'); config.host.append(profileHost, workflowsHost);
+    const profileHost = el('div'), orderImportHost = el('div'), workflowsHost = el('div'); config.host.append(profileHost, orderImportHost, workflowsHost);
+    let orderImport;
     workflowsHost.append(el('p', 'Conferindo o contexto da conexão para os cenários de teste…', 'help'));
     let generation = 0, checking = false, merchant, catalog;
     function workflows() {
@@ -491,13 +547,14 @@
       merchant = merchantPanel(scoped); catalog = catalogPanel(scoped);
     }
     const profile = homologationProfile({ ...config, host: profileHost,
-      profileChanged: () => { if (!checking && config.isCurrent()) workflows(); },
+      profileChanged: () => { if (!checking && config.isCurrent()) { workflows(); void orderImport?.refresh(); } },
       checkingProfile: value => {
         checking = value;
         if (value) { generation++; workflowsHost.replaceChildren(el('p', 'Verificando a conta nova. Aguarde para consultar os cenários manuais de teste.', 'help')); }
-        else if (config.isCurrent()) workflows();
+        else if (config.isCurrent()) { workflows(); void orderImport?.refresh(); }
       },
     });
+    orderImport = homologationOrderImport({ ...config, host: orderImportHost });
     const controls = { refresh: () => { void profile.refresh(); if (!checking) { void merchant?.refresh(); void catalog?.refresh(); } } };
     mounted.set(options.host, controls); return controls;
   }
@@ -506,6 +563,7 @@
     if (!host || !order || order.source !== 'ifood' || order.delivery?.ifood?.environment !== 'test' || typeof api !== 'function' || typeof isCurrent !== 'function') return;
     if (orderMounted.has(host)) return orderMounted.get(host);
     const base = `/admin/ifood/orders/${encodeURIComponent(order.id)}`;
+    const profileMode = order.delivery?.ifood?.profile_mode === 'homologation' ? 'homologation' : 'legacy';
     const panel = section('Comandos do pedido · TESTE', 'Comandos iFood do pedido de teste');
     const details = el('details'); details.append(el('summary', 'Solicitações manuais ao iFood · teste'), panel.host); host.append(details);
     const history = el('div'), controls = el('div', undefined, 'form-actions');
@@ -530,7 +588,10 @@
     });
     const cancel = button('Solicitar cancelamento no iFood', () => submit('requestCancellation'));
     controls.append(refreshButton, ...buttons.map(value => value.node));
-    panel.host.append(el('p', 'Este pedido usa a conexão anterior do importador, independente da conta nova de homologação. Cada botão envia uma solicitação à loja de teste deste pedido. HTTP 202 indica aceite para processamento; a etapa local, o caixa e o estoque permanecem sem confirmação. Confira o resultado no Portal do iFood.', 'help'),
+    const connectionHelp = profileMode === 'homologation'
+      ? 'Este pedido usa a conexão da conta nova Teste (C). Cada botão envia uma solicitação à loja de teste deste pedido. HTTP 202 indica aceite para processamento; a etapa local, o caixa e o estoque permanecem sem confirmação. Confira o resultado no Portal do iFood.'
+      : 'Este pedido usa a conexão anterior do importador, independente da conta nova de homologação. Cada botão envia uma solicitação à loja de teste deste pedido. HTTP 202 indica aceite para processamento; a etapa local, o caixa e o estoque permanecem sem confirmação. Confira o resultado no Portal do iFood.';
+    panel.host.append(el('p', connectionHelp, 'help'),
       controls, reasonButton, reason.box, justification.box, cancel, history);
     function update() {
       refreshButton.disabled = busy;

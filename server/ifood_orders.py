@@ -14,7 +14,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Request
 
-from . import ifood
+from . import ifood, ifood_homologation_profile as test_profile
 from .core import db, require_admin, utcnow
 
 router = APIRouter()
@@ -23,6 +23,7 @@ COOLDOWN = 60
 MAX_DETAILS = 3
 MESSAGES = {
     'not_ready': 'Confira a configuração e teste a conexão com a loja antes de importar pedidos.',
+    'homologation_not_ready': 'Verifique a conta nova e a loja de teste Teste (C) antes de importar pedidos.',
     'wait': 'Uma consulta está em andamento ou foi feita recentemente. Aguarde um minuto e atualize a configuração.',
     'empty': 'Consulta concluída. Nenhum novo pedido de teste disponível nesta consulta.',
     'imported': 'Pedidos de teste salvos no PDV. Os eventos foram confirmados após a gravação.',
@@ -43,28 +44,60 @@ def initialize(conn):
         external_order_id TEXT NOT NULL, created_at TEXT NOT NULL,
         acknowledged INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY(merchant_id, client_id, event_id))''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ifood_homologation_import_state (
+        id INTEGER PRIMARY KEY CHECK(id=1), fingerprint TEXT NOT NULL,
+        started_at REAL NOT NULL, result_json TEXT NOT NULL DEFAULT '')''')
 
 
 def ready(request, cfg):
-    if not cfg['ready']:
+    if not cfg['ready'] or cfg.get('environment') != 'test':
         return False
+    if cfg.get('profile_mode') == 'homologation':
+        return test_profile.readiness(request, cfg) == 'available'
     with db(request) as conn:
         row = conn.execute('SELECT * FROM ifood_connection_check WHERE id=1').fetchone()
     return bool(row and row['fingerprint'] == ifood.fingerprint(cfg) and row['result_json']
                 and json.loads(row['result_json']).get('state') == 'verified')
 
 
-def dashboard(request):
-    cfg = ifood.config()
+def _profile(profile):
+    if profile not in ('legacy', 'homologation'):
+        raise ValueError('Perfil de importação inválido.')
+    if profile == 'legacy':
+        return ifood.config()
+    cfg = test_profile.selected_config()
+    if cfg.get('profile_mode') != 'homologation':
+        # Never let the new-account import endpoint fall back to legacy credentials.
+        cfg = dict(zip(ifood.REQUIRED, ('', '', '')))
+        cfg.update(enabled=True, environment='test', missing=list(test_profile.REQUIRED),
+                   valid=False, ready=False, profile_mode='homologation', _selection='manual')
+    return cfg
+
+
+def _state_table(profile):
+    # Names are constants, never accepted from an API request.
+    return 'ifood_import_state' if profile == 'legacy' else 'ifood_homologation_import_state'
+
+
+def dashboard(request, profile='legacy'):
+    cfg = _profile(profile)
     available = ready(request, cfg)
     merchant, client = cfg[ifood.REQUIRED[2]].lower(), cfg[ifood.REQUIRED[0]].lower()
+    table = _state_table(profile)
     with db(request) as conn:
-        row = conn.execute('SELECT * FROM ifood_import_state WHERE id=1').fetchone()
+        row = conn.execute(f'SELECT * FROM {table} WHERE id=1').fetchone()
         pending = conn.execute('SELECT COUNT(*) FROM ifood_imported_events WHERE merchant_id=? AND client_id=? '
                                'AND acknowledged=0', (merchant, client)).fetchone()[0]
     last = json.loads(row['result_json']) if row and row['fingerprint'] == ifood.fingerprint(cfg) and row['result_json'] else None
-    return {'import_available': available, 'automatic': available and os.environ.get('SAHARA_IFOOD_IMPORT_ENABLED') == '1',
-            'last_sync': last, 'pending_ack': pending}
+    message = ('A conexão da conta nova está verificada. Busque pedidos para continuar o cenário Order de teste.'
+               if available and profile == 'homologation' else
+               MESSAGES['homologation_not_ready'] if profile == 'homologation' else
+               ifood.MESSAGES['verified'] if available else MESSAGES['not_ready'])
+    return {'import_available': available, 'message': message,
+            'automatic': profile == 'legacy' and available and os.environ.get('SAHARA_IFOOD_IMPORT_ENABLED') == '1',
+            'last_sync': last, 'pending_ack': pending, 'environment': cfg['environment'],
+            'profile_mode': cfg.get('profile_mode', profile), 'client_id': client,
+            'configured_merchant_id': merchant}
 
 
 def text(value, limit=400):
@@ -164,6 +197,9 @@ def normalize_order(raw, cfg, external_id):
     scheduled = raw.get('orderTiming') == 'SCHEDULED'
     requested = timestamp(schedule['deliveryDateTimeStart']) if scheduled else None
     meta = {'environment': 'test', 'order_id': external_id, 'display_id': text(raw.get('displayId')),
+        'profile_mode': cfg.get('profile_mode', 'legacy'),
+        'client_id': cfg[ifood.REQUIRED[0]].lower(),
+        'merchant_id': merchant,
         'delivery_fee_cents': amounts['deliveryFee'], 'additional_fees_cents': amounts['additionalFees'],
         'pending_cents': pending, 'prepaid_cents': prepaid, 'payment_methods': normalized_methods,
         'delivered_by': text(delivery.get('deliveredBy')), 'pickup_code': text(delivery.get('pickupCode')),
@@ -215,24 +251,30 @@ def persist(request, cfg, event, normalized=None):
     return imported
 
 
-def sync(request, stop=None):
-    cfg = ifood.config()
+def sync(request, stop=None, profile='legacy'):
+    cfg = _profile(profile)
     if not ready(request, cfg):
-        return {'state': 'not_ready', 'message': MESSAGES['not_ready']}
+        message = MESSAGES['homologation_not_ready'] if profile == 'homologation' else MESSAGES['not_ready']
+        return {'state': 'not_ready', 'message': message, 'profile_mode': cfg.get('profile_mode', profile),
+                'client_id': cfg[ifood.REQUIRED[0]].lower() if ifood.identifier(cfg[ifood.REQUIRED[0]]) else None,
+                'configured_merchant_id': cfg[ifood.REQUIRED[2]].lower() if ifood.identifier(cfg[ifood.REQUIRED[2]]) else None}
     stamp, digest = time.time(), ifood.fingerprint(cfg)
+    table = _state_table(profile)
+    merchant, client = cfg[ifood.REQUIRED[2]].lower(), cfg[ifood.REQUIRED[0]].lower()
     with db(request) as conn:
-        row = conn.execute('SELECT * FROM ifood_import_state WHERE id=1').fetchone()
+        row = conn.execute(f'SELECT * FROM {table} WHERE id=1').fetchone()
         interval = COOLDOWN if row and row['result_json'] else 180
         previous = json.loads(row['result_json']) if row and row['result_json'] else {}
         if previous.get('state') == 'quota' or previous.get('error') == ifood.MESSAGES['quota']:
             interval = 600
         if row and stamp - row['started_at'] < interval:
-            return {'state': 'wait', 'message': MESSAGES['wait']}
-        conn.execute("INSERT INTO ifood_import_state VALUES(1,?,?,'') ON CONFLICT(id) DO UPDATE SET "
+            return {'state': 'wait', 'message': MESSAGES['wait'], 'environment': 'test',
+                    'profile_mode': cfg.get('profile_mode', profile), 'client_id': client,
+                    'configured_merchant_id': merchant}
+        conn.execute(f"INSERT INTO {table} VALUES(1,?,?,'') ON CONFLICT(id) DO UPDATE SET "
                      "fingerprint=excluded.fingerprint,started_at=excluded.started_at,result_json=''", (digest, stamp))
     counts = dict(imported=0, replayed=0, acknowledged=0, unsupported=0, failed=0, remaining=0)
     state, error_state, error_phase, http_status, ack_status = 'empty', None, None, None, None
-    merchant, client = cfg[ifood.REQUIRED[2]].lower(), cfg[ifood.REQUIRED[0]].lower()
     try:
         token = ifood.access_token(cfg)
         headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}
@@ -295,7 +337,8 @@ def sync(request, stop=None):
         error_state = error.state
         error_phase, http_status = error.phase, error.http_status
     answer = {'state': state, 'message': MESSAGES.get(state, ifood.MESSAGES.get(state, ifood.MESSAGES['response'])),
-              **counts, 'checked_at': utcnow()}
+              **counts, 'checked_at': utcnow(), 'profile_mode': cfg.get('profile_mode', profile),
+              'client_id': client, 'configured_merchant_id': merchant, 'environment': 'test'}
     if error_state:
         answer['error'] = ifood.MESSAGES[error_state]
         answer['error_phase'] = error_phase
@@ -305,7 +348,7 @@ def sync(request, stop=None):
     with db(request) as conn:
         answer['pending_ack'] = conn.execute('SELECT COUNT(*) FROM ifood_imported_events WHERE merchant_id=? AND client_id=? '
                                             'AND acknowledged=0', (merchant, client)).fetchone()[0]
-        conn.execute('UPDATE ifood_import_state SET result_json=? WHERE id=1 AND fingerprint=? AND started_at=?',
+        conn.execute(f'UPDATE {table} SET result_json=? WHERE id=1 AND fingerprint=? AND started_at=?',
                      (json.dumps(answer, ensure_ascii=False), digest, stamp))
     return answer
 
@@ -339,3 +382,13 @@ def status(request: Request, admin=Depends(require_admin)):
 @router.post('/api/admin/ifood/import')
 def import_orders(request: Request, admin=Depends(require_admin)):
     return sync(request)
+
+
+@router.get('/api/admin/ifood/homologation/import')
+def homologation_import_status(request: Request, admin=Depends(require_admin)):
+    return dashboard(request, profile='homologation')
+
+
+@router.post('/api/admin/ifood/homologation/import')
+def import_homologation_orders(request: Request, admin=Depends(require_admin)):
+    return sync(request, profile='homologation')

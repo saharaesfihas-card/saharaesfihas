@@ -10,6 +10,7 @@ from threading import Event
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs
 
 from fastapi.testclient import TestClient
 
@@ -336,3 +337,49 @@ class IFoodOrderActionTests(unittest.TestCase):
                 ifood.HOST + '/authentication/v1.0/oauth/token',
                 ifood.HOST + REMOTE, ifood.HOST + REMOTE + '/confirm'])
         self.assertEqual(before, self.snapshot())
+
+    def test_homologation_order_commands_use_the_new_test_profile(self):
+        new_secret = 'fictional-new-order-profile-secret'
+        new_merchant = profile.TEST_MERCHANT_ID
+        with patch.dict(os.environ, dict(zip(profile.REQUIRED,
+                (profile.CLIENT_ID, new_secret, new_merchant))) | {profile.ENVIRONMENT: 'test'}):
+            def new_profile_transport(request, **kwargs):
+                path = request.full_url.removeprefix(ifood.HOST)
+                if path == '/authentication/v1.0/oauth/token':
+                    self.calls.append(request)
+                    credentials = parse_qs(request.data.decode())
+                    self.assertEqual(credentials['clientId'], [profile.CLIENT_ID])
+                    self.assertEqual(credentials['clientSecret'], [new_secret])
+                    return response({'accessToken': TOKEN})
+                if path == '/merchant/v1.0/merchants':
+                    self.calls.append(request)
+                    return response([{'id': new_merchant}])
+                if path == '/merchant/v1.0/merchants/' + new_merchant:
+                    self.calls.append(request)
+                    return response({'id': new_merchant, 'test': 'TEST'})
+                return self.transport(request, **kwargs)
+
+            with patch('server.ifood.evolution.open_url', side_effect=new_profile_transport):
+                verified = self.client.post('/api/admin/ifood/homologation-profile/check', json={}, headers=self.headers).json()
+            self.assertEqual(verified['state'], 'verified')
+            metadata = {'ifood': {'environment': 'test', 'order_id': ORDER, 'profile_mode': 'homologation',
+                                  'client_id': profile.CLIENT_ID, 'merchant_id': new_merchant}}
+            self.details = {'id': ORDER, 'merchant': {'id': new_merchant}, 'orderType': 'DELIVERY'}
+            with sqlite3.connect(self.app.state.db_path) as conn:
+                conn.execute('UPDATE orders SET delivery_json=? WHERE id=?', (json.dumps(metadata), LOCAL))
+                conn.execute('UPDATE ifood_imported_orders SET merchant_id=? WHERE order_id=?', (new_merchant, LOCAL))
+
+            status = self.client.get(PATH + '/actions').json()
+            self.assertTrue(status['actions_available'])
+            self.assertEqual((status['profile_mode'], status['client_id'], status['configured_merchant_id']),
+                ('homologation', profile.CLIENT_ID, new_merchant))
+
+            self.calls.clear()
+            with patch('server.ifood.evolution.open_url', side_effect=new_profile_transport):
+                result = self.post(key='new-account-command-0001').json()
+            self.assertEqual(result['state'], 'accepted_pending')
+            self.assertEqual((result['profile_mode'], result['client_id'], result['configured_merchant_id']),
+                ('homologation', profile.CLIENT_ID, new_merchant))
+            self.assertEqual([call.full_url for call in self.calls], [ifood.HOST + '/authentication/v1.0/oauth/token',
+                ifood.HOST + REMOTE, ifood.HOST + REMOTE + '/confirm'])
+            self.assertNotIn(new_secret, json.dumps(result))

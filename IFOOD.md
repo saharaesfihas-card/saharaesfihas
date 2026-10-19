@@ -84,9 +84,9 @@ funcionamento da loja no iFood.
 
 Todos os cenários de homologação devem usar loja de teste confirmada e ambiente
 isolado. Os cadastros das três lojas reais não são alvos de homologação.
-Não substituir a configuração anterior do importador pelas credenciais da nova
-conta sem confirmar o vínculo e preparar um perfil separado: a verificação e a
-fila de eventos existentes pertencem à configuração de origem.
+A importação anterior permanece vinculada à sua configuração e fila. A nova
+conta usa um fluxo de importação de teste separado, descrito abaixo; as credenciais
+não substituem umas às outras.
 
 Os recursos implementados não equivalem a cenários homologados. Ainda é necessário
 executá-los na loja de teste, conferir os resultados no Portal do Parceiro,
@@ -101,6 +101,12 @@ da loja de teste. Os pedidos aparecem em **Pedidos e cozinha**, com identificaç
 A indicação pública da integração continua pendente: a loja real, a homologação,
 a sincronização das etapas/cancelamentos e o Entrega Fácil ainda precisam de
 implementação e validação próprias.
+
+O importador anterior consulta somente a loja de teste ligada à conexão anterior.
+Para a conta nova, o fluxo manual separado precisa estar implantado e ser acionado em
+**Integrações → Pedidos da conta nova · TESTE**. Sua reserva e estado de consulta
+são independentes do importador anterior. Não use os comandos de um pedido antigo
+como evidência de que o pedido da conta nova foi importado.
 
 ## Configuração no serviço do PDV no Render
 
@@ -159,12 +165,16 @@ Mudanças de perfil durante uma chamada invalidam o contexto anterior. Credencia
 não aparecem na interface ou nas respostas. A variável opcional
 `SAHARA_IFOOD_HOMOLOGATION_ENVIRONMENT` tem padrão `test`.
 
-O importador, a fila de eventos e os comandos dos pedidos já importados continuam
-usando explicitamente a conexão legada e sua verificação original. Verificar o
-perfil novo não substitui essas variáveis ou a fila, não importa pedidos da conta
-nova e não habilita nenhuma das três lojas reais. Os registros de operações são
-separados por app e loja; uma troca de segredo não apaga a propriedade nem permite
-repetir uma escrita de resultado incerto.
+O importador antigo, sua fila automática e os pedidos já existentes continuam
+usando explicitamente a conexão anterior e sua verificação original. Foi preparado
+um fluxo manual separado para importar eventos da conta nova Teste (C), usando
+uma reserva de consulta própria e as mesmas tabelas de pedidos, identificadas pelo
+perfil e Merchant. Depois de implantado, a tela **Integrações** terá uma seção
+**Pedidos da conta nova · TESTE**; só fica habilitada após a verificação dessa
+conta. As ações manuais de um pedido novo usam as credenciais da conta nova; os
+pedidos antigos continuam na conexão anterior. A implementação passou pelas
+verificações locais; como o deploy automático do Render está desligado, o fluxo
+só aparecerá no PDV após um deploy manual. Nenhum dos dois fluxos habilita as lojas reais.
 
 ## Contratos confirmados e fluxo
 

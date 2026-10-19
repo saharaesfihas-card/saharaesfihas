@@ -12,7 +12,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
-from . import ifood, ifood_stores, ifood_test_api
+from . import ifood, ifood_stores, ifood_test_api, ifood_homologation_profile as test_profile
 from .core import db, require_admin, utcnow
 
 router = APIRouter()
@@ -68,14 +68,25 @@ def target(request, order_id):
         raise HTTPException(404, 'Pedido não encontrado.')
     try:
         metadata = json.loads(row['delivery_json']).get('ifood', {})
-        valid = (row['source'] == 'ifood' and row['merchant_id'] == ifood_stores.TEST_MERCHANT_ID
+        profile = metadata.get('profile_mode', 'legacy')
+        if profile not in ('legacy', 'homologation'):
+            raise ValueError()
+        if profile == 'homologation':
+            valid_merchant = row['merchant_id'] == test_profile.TEST_MERCHANT_ID
+            valid_client = metadata.get('client_id') == test_profile.CLIENT_ID
+        else:
+            valid_merchant = row['merchant_id'] == ifood_stores.TEST_MERCHANT_ID
+            legacy_cfg = ifood_test_api.configuration(legacy=True)
+            valid_client = not metadata.get('client_id') or metadata.get('client_id') == legacy_cfg[ifood.REQUIRED[0]].lower()
+        valid = (row['source'] == 'ifood' and valid_merchant and valid_client
                  and ifood.identifier(row['external_id']) and metadata.get('environment') == 'test'
                  and metadata.get('order_id') == row['external_id'])
     except (ValueError, TypeError, AttributeError, RecursionError):
+        profile = 'legacy'
         valid = False
     if not valid:
         raise HTTPException(409, MESSAGES['invalid_target'])
-    session = ifood_test_api.Session(request, order_ids=(row['external_id'],), legacy=True)
+    session = ifood_test_api.Session(request, order_ids=(row['external_id'],), legacy=(profile != 'homologation'))
     if session.merchant_id != row['merchant_id']:
         raise HTTPException(409, MESSAGES['invalid_target'])
     return session, row['external_id']
@@ -89,8 +100,18 @@ def answer(row, state=None):
             'environment': 'test', 'attempt_id': row['id'], 'action': row['action'], 'idempotency_key': row['idempotency_key'],
             'checked_at': row['updated_at'], 'http_status': row['http_status'],
             'error_state': row['error_state'], 'local_status_changed': False,
-            'profile_mode': 'legacy', 'client_id': row['client_id'],
+            'profile_mode': 'homologation' if row['client_id'].lower() == test_profile.CLIENT_ID else 'legacy',
+            'client_id': row['client_id'],
             'configured_merchant_id': row['merchant_id']}
+
+
+def order_profile(request, order_id):
+    with db(request) as conn:
+        row = conn.execute('SELECT delivery_json FROM orders WHERE id=?', (order_id,)).fetchone()
+    try:
+        return json.loads(row['delivery_json']).get('ifood', {}).get('profile_mode', 'legacy') if row else 'legacy'
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        return 'legacy'
 
 
 def expire(conn, order_id):
@@ -100,10 +121,15 @@ def expire(conn, order_id):
                  (utcnow(), order_id, time.time() - LEASE))
 
 
-def provider_failure(error):
+def provider_failure(error, profile='legacy'):
+    cfg = ifood_test_api.configuration(legacy=(profile != 'homologation'))
+    if profile == 'homologation' and cfg.get('profile_mode') != 'homologation':
+        return {'state': error.state, 'message': ifood.MESSAGES.get(error.state, ifood.MESSAGES['provider']),
+                'environment': 'test', 'http_status': getattr(error, 'http_status', None),
+                'profile_mode': 'homologation', 'client_id': None, 'configured_merchant_id': None}
     return {'state': error.state, 'message': ifood.MESSAGES.get(error.state, ifood.MESSAGES['provider']),
             'environment': 'test', 'http_status': getattr(error, 'http_status', None),
-            **ifood_test_api.metadata(ifood_test_api.configuration(legacy=True))}
+            **ifood_test_api.metadata(cfg)}
 
 
 def details(session, external_id):
@@ -143,11 +169,12 @@ def finish(request, attempt_id, state, http_status=None, error_state=None):
 
 
 def execute(request, order_id, body):
+    profile = order_profile(request, order_id)
     try:
         session, external_id = target(request, order_id)
         session.unchanged()
     except ifood.ProviderError as error:
-        return provider_failure(error)
+        return provider_failure(error, profile)
     digest = hashlib.sha256(json.dumps(body.model_dump(), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     attempt_id = uuid.uuid4().hex
     with db(request) as conn:
@@ -201,11 +228,12 @@ def execute(request, order_id, body):
 
 @router.get(PREFIX + '/actions')
 def status(order_id: str, request: Request, admin=Depends(require_admin)):
+    profile = order_profile(request, order_id)
     try:
         session, _ = target(request, order_id)
         session.unchanged()
     except ifood.ProviderError as error:
-        return {**provider_failure(error), 'actions_available': False, 'attempts': []}
+        return {**provider_failure(error, profile), 'actions_available': False, 'attempts': []}
     with db(request) as conn:
         expire(conn, order_id)
         rows = conn.execute('SELECT * FROM ifood_order_action_attempts WHERE order_id=? ORDER BY started_at DESC LIMIT 50',
@@ -219,6 +247,7 @@ def status(order_id: str, request: Request, admin=Depends(require_admin)):
 
 @router.get(PREFIX + '/cancellation-reasons')
 def cancellation_reasons(order_id: str, request: Request, admin=Depends(require_admin)):
+    profile = order_profile(request, order_id)
     try:
         session, external_id = target(request, order_id)
         details(session, external_id)
@@ -227,7 +256,7 @@ def cancellation_reasons(order_id: str, request: Request, admin=Depends(require_
         return {'environment': 'test', 'state': 'queried', 'reasons': values, 'checked_at': utcnow(),
                 **ifood_test_api.metadata(session.cfg)}
     except ifood.ProviderError as error:
-        return provider_failure(error)
+        return provider_failure(error, profile)
 
 
 @router.post(PREFIX + '/actions')

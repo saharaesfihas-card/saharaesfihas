@@ -361,7 +361,12 @@
       const top = el('div', undefined, 'order-top');
       const heading = el('h2', `Pedido #${orderNumber(order)}`, 'order-id'); heading.title = `Pedido #${orderNumber(order)}`; heading.setAttribute('aria-label', `Pedido ${orderNumber(order)}`);
       top.append(heading, badge(statuses[order.status] || order.status, `status-${stageKey(order.status)}`)); card.append(top);
-      if (fromIFood) card.append(el('p', 'iFood · loja de teste. Confira e gerencie as etapas no Gestor do iFood.', 'badge warning'));
+      if (fromIFood) {
+        const sourceLabel = ifood.profile_mode === 'homologation'
+          ? 'iFood · conta nova Teste (C). Confira e gerencie as etapas no Gestor do iFood.'
+          : 'iFood · conexão anterior, loja de teste. Confira e gerencie as etapas no Gestor do iFood.';
+        card.append(el('p', sourceLabel, 'badge warning'));
+      }
       else if (order.status !== 'cancelled') card.append(orderProgress(order.status));
       if (order.source === 'whatsapp') card.append(el('p', 'Recebido pelo WhatsApp', 'badge'));
       const customer = el('div', undefined, 'order-customer');
@@ -941,7 +946,7 @@
       importStatus.textContent = [result.message, result.error].filter(Boolean).join(' ');
       importCounters.textContent = `Importados: ${result.imported || 0} · Já recebidos: ${result.replayed || 0} · Eventos confirmados: ${result.acknowledged || 0} · Confirmações pendentes: ${result.pending_ack || 0} · Eventos não implementados: ${result.unsupported || 0} · Falhas: ${result.failed || 0} · Próxima consulta: ${result.remaining || 0}`;
     }
-    const importButton = button('Buscar pedidos de teste do iFood', async () => {
+    const importButton = button('Buscar pedidos da conexão anterior · TESTE', async () => {
       importStatus.textContent = 'Buscando eventos e salvando pedidos de teste…';
       try { showImportResult(await api('/admin/ifood/import', { method: 'POST', body: {} })); }
       catch (error) { importStatus.textContent = error.message; throw error; }
@@ -974,7 +979,7 @@
       el('p', 'Esta verificação consulta apenas a autenticação e a loja.', 'help'),
       merchantSection,
       el('h3', 'Pedidos da loja de teste'), importButton, importStatus, importCounters, automaticStatus,
-      el('p', 'Importa novos pedidos de delivery com os valores do iFood e confirma os eventos após salvar. Os pedidos aparecem em Pedidos e cozinha como testes. Etapas, cancelamentos, recebimentos e entregas devem ser gerenciados no Gestor do iFood. Loja real, sincronização das etapas e Entrega Fácil continuam pendentes.', 'help'));
+      el('p', 'Importa pedidos da conexão anterior com os valores do iFood e confirma os eventos após salvar. A conta nova Teste (C) tem uma fila separada abaixo. Os pedidos aparecem em Pedidos e cozinha como testes. Etapas, cancelamentos, recebimentos e entregas devem ser gerenciados no Gestor do iFood. Loja real, sincronização das etapas e Entrega Fácil continuam pendentes.', 'help'));
     const storesPanel = panel('iFood · três lojas reais', 'Cada loja terá seu próprio cardápio e seus preços. A conexão de produção depende da homologação do aplicativo e da autorização de cada loja no iFood.');
     storesPanel.classList.add('ifood-stores-panel'); storesPanel.setAttribute('aria-label', 'Lojas reais no iFood');
     const storesStatus = el('p', 'Carregando as lojas…', 'help');

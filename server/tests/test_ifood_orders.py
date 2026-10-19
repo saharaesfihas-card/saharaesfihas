@@ -15,7 +15,7 @@ from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
 
-from server import ifood, ifood_orders
+from server import ifood, ifood_orders, ifood_homologation_profile as test_profile
 from server.core import hash_password
 from server.main import create_app
 
@@ -151,6 +151,78 @@ class IFoodOrderTests(unittest.TestCase):
             ifood_orders.EVENTS + '/events:polling', ifood.HOST + '/order/v1.0/orders/' + ORDER,
             ifood_orders.EVENTS + '/events/acknowledgment'])
         self.assertTrue(all(r.get_header('Authorization') == 'Bearer ' + TOKEN for r in self.calls[1:]))
+
+    def test_new_test_account_import_is_separate_and_never_falls_back_to_legacy(self):
+        legacy = self.sync()
+        self.assertEqual(legacy['profile_mode'], 'legacy')
+        self.assertEqual(legacy['imported'], 1)
+        with sqlite3.connect(self.app.state.db_path) as conn:
+            legacy_state = conn.execute('SELECT fingerprint,result_json FROM ifood_import_state WHERE id=1').fetchone()
+
+        new_secret = 'fictional-second-profile-secret'
+        with patch.dict(os.environ, dict(zip(test_profile.REQUIRED,
+                (test_profile.CLIENT_ID, new_secret, test_profile.TEST_MERCHANT_ID))) | {test_profile.ENVIRONMENT: 'test'}):
+            # A verified legacy account must not make the separate importer ready.
+            blocked = self.client.post('/api/admin/ifood/homologation/import', json={}, headers=self.headers).json()
+            self.assertEqual((blocked['state'], blocked['profile_mode']), ('not_ready', 'homologation'))
+
+            def new_account_transport(request, **kwargs):
+                self.calls.append(request)
+                url = request.full_url
+                path = request.full_url.removeprefix(ifood.HOST)
+                if path == '/authentication/v1.0/oauth/token':
+                    self.assertIn(f'clientId={test_profile.CLIENT_ID}', request.data.decode())
+                    self.assertIn(f'clientSecret={new_secret}', request.data.decode())
+                    return BytesIO(json.dumps({'accessToken': TOKEN}).encode())
+                if path == '/merchant/v1.0/merchants':
+                    self.assertEqual(request.get_method(), 'GET')
+                    return BytesIO(json.dumps([{'id': test_profile.TEST_MERCHANT_ID}]).encode())
+                if path == '/merchant/v1.0/merchants/' + test_profile.TEST_MERCHANT_ID:
+                    return BytesIO(json.dumps({'id': test_profile.TEST_MERCHANT_ID, 'test': 'TEST'}).encode())
+                if url == ifood_orders.EVENTS + '/events:polling':
+                    return BytesIO(json.dumps(self.events).encode())
+                if path == '/order/v1.0/orders/' + ORDER:
+                    data = deepcopy(self.raw_order)
+                    data['merchant']['id'] = test_profile.TEST_MERCHANT_ID
+                    return BytesIO(json.dumps(data).encode())
+                if url == ifood_orders.EVENTS + '/events/acknowledgment':
+                    self.assertEqual(request.get_method(), 'POST')
+                    with sqlite3.connect(self.app.state.db_path) as conn:
+                        found = conn.execute('SELECT delivery_json FROM orders WHERE source=?', ('ifood',)).fetchall()
+                        profiles = [json.loads(row[0]).get('ifood', {}).get('profile_mode') for row in found]
+                        self.assertIn('homologation', profiles)
+                        self.assertEqual(conn.execute('SELECT COUNT(*) FROM ifood_imported_events WHERE merchant_id=? AND client_id=? AND acknowledged=0',
+                            (test_profile.TEST_MERCHANT_ID, test_profile.CLIENT_ID)).fetchone()[0], 1)
+                    response = BytesIO(b'')
+                    response.status = 204
+                    return response
+                self.fail('Unexpected new-account provider URL: ' + request.full_url)
+
+            with patch('server.ifood.evolution.open_url', side_effect=new_account_transport):
+                verified = self.client.post('/api/admin/ifood/homologation-profile/check', json={}, headers=self.headers).json()
+                self.assertEqual(verified['state'], 'verified')
+                self.calls.clear()
+                imported = self.client.post('/api/admin/ifood/homologation/import', json={}, headers=self.headers)
+            self.assertEqual(imported.status_code, 200)
+            self.assertNotIn(new_secret, imported.text)
+            result = imported.json()
+            self.assertEqual((result['state'], result['imported'], result['acknowledged']), ('imported', 1, 1))
+            self.assertEqual((result['profile_mode'], result['client_id'], result['configured_merchant_id']),
+                ('homologation', test_profile.CLIENT_ID, test_profile.TEST_MERCHANT_ID))
+            rows = self.imported()
+            new_order = next(row for row in rows if row['delivery']['ifood'].get('profile_mode') == 'homologation')
+            self.assertEqual(new_order['delivery']['ifood']['client_id'], test_profile.CLIENT_ID)
+            self.assertEqual(new_order['delivery']['ifood']['merchant_id'], test_profile.TEST_MERCHANT_ID)
+            self.assertEqual([request.full_url for request in self.calls], [
+                ifood.HOST + '/authentication/v1.0/oauth/token',
+                ifood_orders.EVENTS + '/events:polling',
+                ifood.HOST + '/order/v1.0/orders/' + ORDER,
+                ifood_orders.EVENTS + '/events/acknowledgment'])
+            with sqlite3.connect(self.app.state.db_path) as conn:
+                new_state = conn.execute('SELECT fingerprint,result_json FROM ifood_homologation_import_state WHERE id=1').fetchone()
+                current_legacy_state = conn.execute('SELECT fingerprint,result_json FROM ifood_import_state WHERE id=1').fetchone()
+            self.assertIsNotNone(new_state)
+            self.assertEqual(current_legacy_state, legacy_state)
 
     def test_duplicate_order_distinct_events_and_replay(self):
         second = '66666666-6666-4666-8666-666666666666'
