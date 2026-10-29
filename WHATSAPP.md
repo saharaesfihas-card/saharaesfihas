@@ -260,3 +260,7 @@ Referências: [Evolution API](https://github.com/evolution-foundation/evolution-
 [versão 2.3.7](https://github.com/evolution-foundation/evolution-api/releases/tag/2.3.7),
 [imagem oficial](https://hub.docker.com/r/evoapicloud/evolution-api),
 [Blueprints do Render](https://render.com/docs/blueprint-spec).
+
+### Imagem do cardápio enviada no WhatsApp
+
+O bot utiliza `/images/cardapio-whatsapp-20261029.png`, definido em `MENU_IMAGE` em `server/whatsapp.py`, para Evolution e Meta. A versão inclui Prestígio (R$ 5,00), o destaque Mais pedidos para o Combo 10 (R$ 35,00), os preços cadastrados de KitKat (R$ 5,50) e carne seca com cream cheese (R$ 7,50), e o link do cardápio público. Ao substituir a arte, use um novo nome de arquivo e publique tanto o PDV quanto o site do cardápio, evitando a reutilização de imagens antigas em cache. A imagem é estática; disponibilidade e pedidos são conferidos no cardápio online.
