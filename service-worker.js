@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-combo-10-posicao-original-v2';
+const CACHE = 'sahara-pwa-destaques-ricota-sensacao-v3';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'catalog-live.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
