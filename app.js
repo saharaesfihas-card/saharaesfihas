@@ -16,7 +16,7 @@ const specialItems=savoryGroup.items.filter(item=>!traditionalIds.includes(item[
 specialItems.unshift(['carne-queijo','Carne com queijo','Carne temperada com queijo derretido.']);
 specialItems.push(...[["atum","Atum","Atum desfiado, saboroso e assado na hora.","R$ 6,50"],["carne-seca","Carne seca","Carne seca desfiada, suculenta e cheia de sabor.","R$ 6,50"],["carne-seca-cream-cheese","Carne seca com cream cheese","Carne seca desfiada com cream cheese cremoso.","R$ 7,50"]]);
 groups.splice(groups.indexOf(savoryGroup),1,{title:'Esfihas tradicionais',price:savoryGroup.price,items:traditionalItems},{title:'Esfihas especiais',price:savoryGroup.price,items:specialItems});
-const categoryOrder=["Esfihas tradicionais","Esfihas especiais","Esfihas doces","Combos","Bebidas","Shawarma"];
+const categoryOrder=["Combos","Esfihas tradicionais","Esfihas especiais","Esfihas doces","Bebidas","Shawarma"];
 groups.sort((a,b)=>categoryOrder.indexOf(a.title)-categoryOrder.indexOf(b.title));
 for(const group of groups){
   if(['Esfihas especiais','Esfihas doces'].includes(group.title)){
@@ -29,7 +29,7 @@ let catalogReady = !Boolean(window.SaharaSystemConfig?.apiBase);
 const money=cents=>(cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 try{const saved=JSON.parse(localStorage.getItem('sahara-cart')||'[]');for(const [id,q] of saved){if(catalog.some(p=>p.id===id)&&Number.isInteger(q)&&q>0&&q<=99)cart.set(id,q);}}catch{}
 
-document.querySelector('#products').innerHTML=groups.map((g,i)=>`<section class="category"><div class="category-title"><span>0${i+1}</span><h3>${g.title}</h3></div>${g.items.map(([id,name,description,price])=>`<article class="product${productPhotos[id]?' has-photo':''}">${productPhoto(id,name)}<div class="product-info"><h4>${name}</h4><p>${description}</p><span class="price">${price||g.price||(id==='shawarma-frango'?'R$ 19,99':'R$ 24,99')}</span></div><div class="quantity product-quantity" role="group" aria-label="Quantidade de ${name} — ${g.title}"><button type="button" data-change="${id}" data-delta="-1" aria-label="Diminuir ${name} — ${g.title}" disabled>−</button><output data-quantity="${id}" aria-label="Quantidade de ${name}">0</output><button type="button" data-change="${id}" data-delta="1" aria-label="Adicionar ${name} — ${g.title}">+</button></div></article>`).join('')}</section>`).join('');
+document.querySelector('#products').innerHTML=groups.map((g,i)=>`<section class="category"><div class="category-title"><span>0${i+1}</span><h3>${g.title}</h3></div>${g.items.map(([id,name,description,price])=>`<article class="product${productPhotos[id]?' has-photo':''}${id==='combo-10'?' is-featured':''}">${productPhoto(id,name)}<div class="product-info">${id==='combo-10'?'<span class="product-featured-badge">Mais pedidos</span>':''}<h4>${name}</h4><p>${description}</p><span class="price">${price||g.price||(id==='shawarma-frango'?'R$ 19,99':'R$ 24,99')}</span></div><div class="quantity product-quantity" role="group" aria-label="Quantidade de ${name} — ${g.title}"><button type="button" data-change="${id}" data-delta="-1" aria-label="Diminuir ${name} — ${g.title}" disabled>−</button><output data-quantity="${id}" aria-label="Quantidade de ${name}">0</output><button type="button" data-change="${id}" data-delta="1" aria-label="Adicionar ${name} — ${g.title}">+</button></div></article>`).join('')}</section>`).join('');
 function promotionPrice(product, node) {
   const price = node.querySelector('.price');
   price.textContent = money(product.priceCents);
@@ -156,10 +156,10 @@ const categoryNav=document.querySelector('#category-nav');
 const categorySections=[...document.querySelectorAll('.category')];
 categorySections.forEach((section,i)=>section.id=`category-${i}`);
 const categoryIcons=[
+  '<path d="m3 8 9-5 9 5-9 5-9-5Zm0 0v9l9 5 9-5V8m-9 5v9M7.5 5.5l9 5"/>',
   '<circle cx="12" cy="12" r="8"/><path d="m8 14 4-7 4 7H8Z"/>',
   '<path d="m12 3 2.5 5.5 6 .8-4.4 4.2 1.1 6-5.2-2.9-5.2 2.9 1.1-6L3.5 9.3l6-.8L12 3Z"/>',
   '<path d="M5 10h14l-2 10H7L5 10Z"/><path d="M6 10a4 4 0 0 1 4-5 3 3 0 0 1 6 1 3 3 0 0 1 2 4M10 14v3m4-3v3"/>',
-  '<path d="m3 8 9-5 9 5-9 5-9-5Zm0 0v9l9 5 9-5V8m-9 5v9M7.5 5.5l9 5"/>',
   '<path d="M8 8h8l-1 13H9L8 8Zm5 0 2-5h4M7 8h10"/>',
   '<path d="m7 10 6-6a3 3 0 0 1 5 3l-3 11-6 3-4-7 2-4Z"/><path d="m7 10 9 5M9 7l8 5M6 15l5 6"/>'
 ];

@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'sahara-pwa-prestigio-foto-v1';
+const CACHE = 'sahara-pwa-destaque-combo-10-v1';
 const ROOT = new URL('./', self.registration.scope);
 const ASSETS = [
   'index.html', 'style.css', 'app.js', 'catalog-live.js', 'address.js', 'delivery-fees.js', 'ordering.js', 'ordering.css', 'pwa.css', 'pwa.js', 'manifest.webmanifest',
