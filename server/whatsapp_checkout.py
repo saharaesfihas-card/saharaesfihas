@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from .core import utcnow
-from . import evolution, product_promotions
+from . import evolution, product_promotions, whatsapp_address
 
 TTL = 86400
 MAX_ITEMS = 30
@@ -21,7 +21,7 @@ START = {'pedir', 'novo pedido', 'quero pedir', 'quero fazer um pedido', 'montar
          'quero pedir pelo whatsapp', 'pedir pelo whatsapp', 'quero fazer pedido', 'fazer pedido'}
 QUESTIONS = {
     'name': 'Qual é o seu nome para o pedido?',
-    'street': 'Qual é o endereço de entrega?',
+    'street': 'Envie rua, número da casa e bairro em uma mensagem só. Exemplo: Rua das Flores, 123, Jardim Alvorada. Se não houver número, escreva S/N.',
     'number': 'Qual é o número da casa ou prédio? Se não houver número, envie S/N.',
     'neighborhood': 'Qual é o bairro da entrega em Maringá?',
     'complement': 'Informe complemento ou referência da entrega. Se não houver, envie SEM COMPLEMENTO.',
@@ -125,6 +125,35 @@ def advance(conn, cart):
         cart['data']['quote'] = priced_items(conn, cart)
         from .delivery_estimates import fee_quote
         cart['data']['delivery_quote'] = fee_quote(conn, cart['data'].get('location'))
+
+
+def collect_address(conn, cart, text):
+    if not cart or cart['expired'] or cart['stage'] not in ('name', 'street', 'number', 'neighborhood'):
+        return None
+    fields = whatsapp_address.parse(text)
+    if cart['stage'] == 'name' and (not fields or not {'street', 'number', 'neighborhood'} <= fields.keys()):
+        return None
+    if not fields:
+        if whatsapp_address.combined(text):
+            return 'Não consegui separar o endereço com segurança. Envie assim: Rua das Flores, 123, Jardim Alvorada. Seus itens foram mantidos.'
+        return None
+    if 'street' in fields:
+        # Um endereço digitado substitui o pino anterior; não reaproveita taxa ou distância.
+        from . import delivery_estimates
+        cart['data'].pop('location', None)
+        delivery_estimates.save(conn, cart['phone'])
+    else:
+        from . import delivery_estimates
+        delivery_estimates.reset_waiting(conn, cart['phone'])
+    cart['data'].update(fields)
+    for key in ('quote', 'delivery_quote'):
+        cart['data'].pop(key, None)
+    advance(conn, cart)
+    save(conn, cart)
+    data = cart['data']
+    if all(data.get(key) for key in ('street', 'number', 'neighborhood')):
+        return f"Endereço anotado: {data['street']}, {data['number']} — {data['neighborhood']}.\n" + prompt(conn, cart)
+    return prompt(conn, cart)
 
 
 def receipt(conn, cart):
@@ -336,6 +365,9 @@ def handle(conn, recipient, text):
             return str(error)
     if cart['stage'] == 'review':
         return prompt(conn, cart)
+    address_reply = collect_address(conn, cart, text)
+    if address_reply is not None:
+        return address_reply
     stage = cart['stage']
     value = text.strip()
     maximum = {'name': 100, 'street': 160, 'number': 20, 'neighborhood': 100,

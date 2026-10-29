@@ -147,6 +147,21 @@ após reinício ou alteração na Evolution, especialmente se os eventos pararem
 
 ## 5. Testar antes de usar na operação
 
+### Endereço em uma mensagem
+
+Depois de escolher os itens, o cliente pode enviar **rua, número da casa e bairro
+na mesma mensagem**, por exemplo: `Rua das Flores, 123, Jardim Alvorada`.
+Também aceita os campos em linhas separadas, identificados como `Rua:`, `Número:`
+e `Bairro:`, ou um endereço simples como `Rua das Flores 123 Jardim Alvorada`.
+Para imóvel sem número, use `S/N`.
+
+O bot separa os dados e mostra o endereço entendido. Se faltar um campo, pede
+somente o que falta; complemento e observações continuam disponíveis. Mensagens
+ambíguas recebem um exemplo para correção, sem inventar dados ou perder os itens.
+Um endereço escrito substitui um pino de localização anterior, e as informações
+de entrega são recalculadas. O pedido só é registrado após a revisão e a mensagem
+`CONFIRMAR PEDIDO` do cliente.
+
 Use outro número de celular como cliente:
 
 1. Envie `Olá` e confira o menu automático. Teste `1`, `3` e `4`.

@@ -63,6 +63,107 @@ class WhatsAppCheckoutTests(unittest.TestCase):
         self.say('ATIVAR AVISOS')
         self.assertEqual(self.rows('orders')[0]['whatsapp_opt_in'], 1)
 
+    def address_stage(self):
+        for text in ['PEDIR', '1 carne', 'FINALIZAR', 'Cliente teste']:
+            reply = self.say(text)
+        self.assertIn('uma mensagem', reply)
+        return reply
+
+    def test_complete_address_in_one_message_reaches_review_and_pdv(self):
+        self.address_stage()
+        key = uuid4().hex
+        reply = self.say('Rua das Flores, 123, Jardim Alvorada', identifier=key)
+        self.assertIn('Endereço anotado', reply)
+        self.assertIn('complemento', reply)
+        self.assertEqual(self.cart()['stage'], 'complement')
+        self.assertEqual(self.cart()['data']['street'], 'Rua das Flores')
+        self.assertEqual(self.cart()['data']['number'], '123')
+        self.assertEqual(self.cart()['data']['neighborhood'], 'Jardim Alvorada')
+        revision = self.cart()['revision']
+        self.inbound('Rua das Flores, 123, Jardim Alvorada', identifier=key)
+        self.assertEqual(self.cart()['revision'], revision)
+        for text in ['SEM COMPLEMENTO', 'SEM OBSERVAÇÃO', 'PIX']:
+            reply = self.say(text)
+        self.assertIn('Rua das Flores, 123 — Jardim Alvorada', reply)
+        self.assertEqual(self.rows('orders'), [])
+        self.say('CONFIRMAR PEDIDO')
+        order = self.rows('orders')[0]
+        delivery = json.loads(order['delivery_json'])
+        self.assertEqual((delivery['street'], delivery['number'], delivery['neighborhood']),
+                         ('Rua das Flores', '123', 'Jardim Alvorada'))
+        self.assertEqual(order['payment_status'], 'unpaid')
+
+    def test_partial_combined_address_asks_only_the_missing_field(self):
+        self.address_stage()
+        reply = self.say('Rua das Flores, 123')
+        self.assertEqual(self.cart()['stage'], 'neighborhood')
+        self.assertIn('bairro', reply)
+        self.assertNotIn('número da casa', reply)
+        self.say('Jardim Alvorada')
+        self.assertEqual(self.cart()['stage'], 'complement')
+
+    def test_full_address_can_be_sent_when_house_number_is_pending(self):
+        self.address_stage(); self.say('Rua anterior')
+        self.assertEqual(self.cart()['stage'], 'number')
+        reply = self.say('Rua das Flores 123 Jardim Alvorada')
+        self.assertEqual(self.cart()['stage'], 'complement')
+        self.assertEqual(self.cart()['data']['street'], 'Rua das Flores')
+        self.assertIn('123', reply)
+
+    def test_full_address_before_name_does_not_become_the_customer_name(self):
+        self.say('PEDIR'); self.say('1 carne'); self.say('FINALIZAR')
+        self.say('Rua das Flores, 123, Jardim Alvorada')
+        self.assertEqual(self.cart()['stage'], 'name')
+        self.assertNotIn('name', self.cart()['data'])
+        self.say('Cliente teste')
+        self.assertEqual(self.cart()['stage'], 'complement')
+
+    def test_ambiguous_address_preserves_cart_and_requests_clear_format(self):
+        self.address_stage()
+        data = self.cart()['data']
+        reply = self.say('Rua X 123 Centro 2 Residencial')
+        self.assertIn('Não consegui separar', reply)
+        self.assertEqual(self.cart()['data'], data)
+        self.assertEqual(self.cart()['stage'], 'street')
+        self.assertEqual(self.rows('orders'), [])
+
+    def test_written_address_replaces_old_gps_and_delivery_quote(self):
+        self.address_stage()
+        from server import delivery_estimates
+        with db(self.request) as conn:
+            location = {'latitude': -23.43, 'longitude': -51.91}
+            cart = checkout.load(conn, self.phone)
+            cart['data'].update(location=location, street='', neighborhood='')
+            cart['stage'] = 'number'
+            checkout.save(conn, cart)
+            delivery_estimates.save(conn, self.phone, location)
+        self.assertIn('location', self.cart()['data'])
+        self.say('Rua das Flores, 123, Jardim Alvorada')
+        self.assertNotIn('location', self.cart()['data'])
+        self.assertNotIn('delivery_quote', self.cart()['data'])
+        self.assertEqual(self.cart()['stage'], 'complement')
+
+    def test_address_collection_is_not_swallowed_by_pending_delivery_question(self):
+        self.address_stage()
+        from server import delivery_estimates
+        with db(self.request) as conn:
+            delivery_estimates.save(conn, self.phone, awaiting=True)
+        self.say('Rua das Flores, 123, Jardim Alvorada')
+        self.assertEqual(self.cart()['stage'], 'complement')
+        self.assertEqual(self.cart()['data']['number'], '123')
+
+    def test_partial_address_clears_old_wait_for_location_without_losing_fields(self):
+        self.address_stage()
+        from server import delivery_estimates
+        with db(self.request) as conn:
+            delivery_estimates.save(conn, self.phone, awaiting=True)
+        self.say('Número: 123; Bairro: Jardim Alvorada')
+        self.assertEqual(self.cart()['stage'], 'street')
+        self.say('Rua das Flores')
+        self.assertEqual(self.cart()['stage'], 'complement')
+        self.assertEqual(self.cart()['data']['number'], '123')
+        self.assertEqual(self.cart()['data']['neighborhood'], 'Jardim Alvorada')
+
     def test_menu_link_leads_directly_to_chat_order_and_pdv_confirmation(self):
         menu = self.say('1')
         self.assertIn(whatsapp.config()['menu'], menu)

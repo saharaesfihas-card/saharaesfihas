@@ -7,11 +7,13 @@ from unittest.mock import patch
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 import unittest
+import json
+import subprocess
 
 from fastapi.testclient import TestClient
 
 from server import product_promotions, whatsapp_ai, whatsapp_checkout
-from server.core import db, hash_password
+from server.core import ROOT, db, hash_password
 from server.main import create_app
 
 
@@ -19,6 +21,8 @@ class ProductPromotionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.password_hash = hash_password('promotions-test-password')
+        catalog = json.loads(subprocess.check_output(['node', str(ROOT / 'server/export-catalog.cjs')], text=True))
+        cls.product_ids = {product['id'] for product in catalog}
 
     def setUp(self):
         self.directory = TemporaryDirectory()
@@ -57,7 +61,7 @@ class ProductPromotionTests(unittest.TestCase):
             self.assertEqual([p['product_id'] for p in offers], ['calabresa', 'frango', 'carne'])
             self.assertTrue(all(p['price_cents'] == 299 and not p['enabled'] and not p['effective_today'] for p in offers))
             products = self.prices()
-            self.assertEqual(len(products), 57)
+            self.assertEqual(set(products), self.product_ids)
             self.assertTrue(all('promotion' not in p for p in products.values()))
             for identifier in ('calabresa', 'frango', 'carne'):
                 self.assertEqual(products[identifier]['price_cents'], 400)
@@ -68,7 +72,7 @@ class ProductPromotionTests(unittest.TestCase):
         for weekday in range(7):
             with self.subTest(weekday=weekday), self.time(weekday):
                 products = self.prices()
-                self.assertEqual(len(products), 57)
+                self.assertEqual(set(products), self.product_ids)
                 for identifier, _, day in product_promotions.DEFAULTS:
                     product = products[identifier]
                     self.assertEqual(product['price_cents'], 299 if weekday == day else 400)

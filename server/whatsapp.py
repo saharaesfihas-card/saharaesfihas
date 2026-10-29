@@ -249,6 +249,10 @@ def answer(conn, recipient, text, allow_ai=False, conversational=False, location
         return delivery_estimates.receive(conn, recipient, location)
     if customer_privacy.store_question(text):
         return customer_privacy.response()
+    if collecting:
+        address_reply = whatsapp_checkout.collect_address(conn, cart, text)
+        if address_reply is not None:
+            return address_reply
     delivery_reply = delivery_estimates.handle(conn, recipient, text)
     if delivery_reply is not None:
         return delivery_reply
